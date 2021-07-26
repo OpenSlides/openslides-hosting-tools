@@ -6,6 +6,7 @@
 # Copyright (C) 2019,2021 by Intevation GmbH
 # Author(s):
 # Gernot Schulz <gernot@intevation.de>
+# Adrian Richter <adrian@intevation.de>
 #
 # This program is distributed under the MIT license, as described
 # in the LICENSE file included with the distribution.
@@ -47,6 +48,9 @@ DOCKER_IMAGE_CLIENT=
 DOCKER_IMAGE_NAME_OPENSLIDES=openslides-server
 DOCKER_IMAGE_OPENSLIDES=
 DOCKER_IMAGE_TAG_OPENSLIDES=
+ACCOUNTS=
+AUTOSCALE_ACCOUNTS_OVER=
+AUTOSCALE_RESET_ACCOUNTS_OVER=
 OPT_LONGLIST=
 OPT_SECRETS=
 OPT_METADATA=
@@ -56,6 +60,9 @@ OPT_JSON=
 OPT_ADD_ACCOUNT=1
 OPT_LOCALONLY=
 OPT_FORCE=
+OPT_ALLOW_DOWNSCALE=
+OPT_RESET=
+OPT_DRY_RUN=
 OPT_WWW=
 OPT_FAST=
 OPT_PATIENT=
@@ -115,6 +122,8 @@ Actions:
   update               Update OpenSlides services to a new images
   erase                Remove an instance's volumes (stops the instance if
                        necessary)
+  autoscale            Scale relevant services of an instance based on it's
+                       ACCOUNTS metadatum (adjust values in CONFIG file)
 
 Options:
   -d, --project-dir    Directly specify the project directory
@@ -160,6 +169,12 @@ Options:
     --www              Add a www subdomain in addition to the specified
                        instance domain (to be passed to ACME clients)
 
+  for autoscale:
+    --allow-downscale  Without this option services will only be scaled upward to
+                       to prevent possibly undoing manual scaling adjusmtents
+    --reset            Reset all scaling back to normal
+    --dry-run          Print out actions instead of actually performing them
+
 Colored status indicators in ls mode:
   green                The instance appears to be fully functional
   red                  The instance is running but is unreachable
@@ -202,7 +217,7 @@ arg_check() {
     fatal "Please specify a project name"; return 2;
   }
   case "$MODE" in
-    "start" | "stop" | "remove" | "erase" | "update")
+    "start" | "stop" | "remove" | "erase" | "update" | "autoscale")
       [[ -d "$PROJECT_DIR" ]] || {
         fatal "Instance '${PROJECT_NAME}' not found."
       }
@@ -1188,6 +1203,218 @@ instance_update() {
   log_update
 }
 
+instance_autoscale() {
+  declare -A services_changed=()
+
+  log_scale() { # Append to metadata
+    for service in ${!services_changed[@]}
+    do
+      append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"):"\
+	"Autoscaled $service from ${SCALE_FROM[$service]} to ${SCALE_TO[$service]}"
+    done
+  }
+
+  case "$DEPLOYMENT_MODE" in
+    "compose")
+      echo "autoscale is currently only implemented for stack deployment"
+      return 0
+    ;;
+  esac
+
+  # arrays used to store scaling info per service
+  declare -A SCALE_FROM=()
+  declare -A SCALE_TO=()
+  declare -A SCALE_RUNNING=()
+  declare -A SCALE_COMMANDS=()
+  declare -A SCALE_ENVVARS=()
+
+  # .env file handling
+  declare -A service_env_var=()
+  service_env_var[media]=MEDIA_SERVICE_REPLICAS
+  service_env_var[redis-slave]=REDIS_RO_SERVICE_REPLICAS
+  service_env_var[server]=OPENSLIDES_BACKEND_SERVICE_REPLICAS
+  service_env_var[client]=OPENSLIDES_FRONTEND_SERVICE_REPLICAS
+  service_env_var[autoupdate]=OPENSLIDES_AUTOUPDATE_SERVICE_REPLICAS
+
+  get_service_envvar_name() {
+    if [[ -v "service_env_var["$1"]" ]]; then
+      echo "${service_env_var[$1]}"
+    else
+      return 1
+    fi
+  }
+
+  get_scale_env() {
+    local from=
+    from="$(value_from_env "${PROJECT_DIR}" "$1")"
+    # scaling of 1 is empty string in .env
+    [[ -n "$from" ]] ||
+      from=1
+    echo "$from"
+  }
+
+  set_scale_env() {
+    update_env_file "${PROJECT_DIR}/.env" "$1" "$2" --force
+  }
+
+  # if instance not running only env file will be changed
+  local running=1
+  instance_has_services_running "$PROJECT_STACK_NAME" ||
+    running=
+  if [[ -z "$running" ]]; then
+    echo "WARN: ${PROJECT_NAME} is not running."
+    echo "      The configuration will be updated and changes will take effect" \
+         "upon it's next start."
+  fi
+
+  # extract number of accounts from instance metadata if not already done before
+  if [[ -z "$ACCOUNTS" ]]; then
+    [[ -f "${PROJECT_DIR}/metadata.txt" ]] || fatal "metadata.txt does not exist"
+    ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
+    [[ -n "$ACCOUNTS" ]] || fatal "ACCOUNTS metadatum not specified for $PROJECT_NAME"
+  fi
+  # unnessecary check for good measure
+  [[ -f "${PROJECT_DIR}/.env" ]] ||
+    fatal ".env does not exist"
+
+  # fallback: autoscale everything to 1 if not configured otherwise
+  [[ -n "$AUTOSCALE_ACCOUNTS_OVER" ]] ||
+    AUTOSCALE_ACCOUNTS_OVER[0]="media=1 redis-slave=1 server=1 client=1 autoupdate=1"
+  [[ -n "$AUTOSCALE_RESET_ACCOUNTS_OVER" ]] ||
+    AUTOSCALE_RESET_ACCOUNTS_OVER[0]="media=1 redis-slave=1 server=1 client=1 autoupdate=1"
+
+  # parse scale goals from configuration
+  # make sure indices are in ascending order
+  if [[ -n "$OPT_RESET" ]]; then
+    tlist=$(echo "${!AUTOSCALE_RESET_ACCOUNTS_OVER[@]}" | tr " " "\n" | sort -g | tr "\n" " ")
+  else
+    tlist=$(echo "${!AUTOSCALE_ACCOUNTS_OVER[@]}" | tr " " "\n" | sort -g | tr "\n" " ")
+  fi
+  for threshold in $tlist; do
+    if [[ "$ACCOUNTS" -ge "$threshold" ]]; then
+      if [ -n "$OPT_RESET" ]; then
+        scalings="${AUTOSCALE_RESET_ACCOUNTS_OVER[$threshold]}"
+      else
+        scalings="${AUTOSCALE_ACCOUNTS_OVER[$threshold]}"
+      fi
+      # parse scalings string one by one ...
+      while [[ $scalings =~ ^\ *([a-zA-Z0-9-]+)=([0-9]+)\ * ]]; do
+        # and update array
+        SCALE_TO[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+        # truncate parsed info
+        scalings="${scalings:${#BASH_REMATCH[0]}}"
+      done
+      # if len(scalings) != 0 not every value matched the regex
+      [[ -z "$scalings" ]] ||
+        fatal "scaling values could not be parsed, see: $scalings"
+    fi
+  done
+
+  if [[ -n "$running" ]]; then
+    # ask current scalings from docker
+    local docker_str="$(docker stack services --format "{{.Name}} {{.Replicas}}" ${PROJECT_STACK_NAME})"
+    for service in "${!SCALE_TO[@]}"
+    do
+      [[ "$docker_str" =~ "$PROJECT_STACK_NAME"_"$service"[[:space:]]([0-9]+)/([0-9]+) ]]
+      SCALE_RUNNING["$service"]="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+      SCALE_FROM["$service"]="${BASH_REMATCH[2]}"
+    done
+  else
+    # ask current scalings from .env file
+    local from=
+    local envname=
+    for service in "${!SCALE_TO[@]}"
+    do
+      envname=$(get_service_envvar_name "$service") || {
+        echo "WARN: $service is not configurable in .env, skipping"
+        continue
+      }
+      from=$(get_scale_env "$envname")
+      SCALE_RUNNING["$service"]="$from"
+      SCALE_FROM["$service"]="$from"
+    done
+  fi
+
+  # print out overview
+  local fmt_str="%-24s %-12s %-12s\n"
+  # headline
+  if [[ -n "$OPT_RESET" ]]; then
+    echo "Resetting scalings of $PROJECT_NAME:"
+  else
+    echo "$PROJECT_NAME is set to handle $ACCOUNTS accounts."
+  fi
+  printf "$fmt_str" "<service>" "<scale from>" "<scale to>"
+  # body
+  for service in "${!SCALE_FROM[@]}"
+  do
+    printf "$fmt_str" "$service" "${SCALE_RUNNING[$service]}" "${SCALE_TO[$service]}"
+  done
+
+  # determine services on which action needs to be taken
+  for service in "${!SCALE_FROM[@]}"
+  do
+    if [[ -n "$OPT_RESET" || -n "$OPT_ALLOW_DOWNSCALE" ]]; then
+      # scale whenever current scale differs from goal
+      if [[ "${SCALE_FROM[$service]}" -ne "${SCALE_TO[$service]}" ]]; then
+        if [[ -n "$running" ]]; then
+          SCALE_COMMANDS[$service]="docker service scale ${PROJECT_STACK_NAME}_${service}=${SCALE_TO[$service]}"
+        fi
+        envname=$(get_service_envvar_name "$service") || {
+          echo "WARN: $service is not configurable in .env, scale will not persist"
+          continue
+        }
+        SCALE_ENVVARS[$service]="set_scale_env $envname ${SCALE_TO[$service]}"
+      fi
+    else
+      # only scale upward in case a service has manually been upscaled unexpectedly high
+      if [[ ${SCALE_FROM[$service]} -lt ${SCALE_TO[$service]} ]]; then
+        if [[ -n "$running" ]]; then
+          SCALE_COMMANDS[$service]="docker service scale ${PROJECT_STACK_NAME}_${service}=${SCALE_TO[$service]}"
+        fi
+        envname=$(get_service_envvar_name "$service") || {
+          echo "WARN: $service is not configurable in .env, scale will not persist"
+          continue
+        }
+        SCALE_ENVVARS[$service]="set_scale_env $envname ${SCALE_TO[$service]}"
+      fi
+    fi
+  done
+
+  # no commands or env updates generated, i.e. all services are already appropriately scaled
+  if [[ ${#SCALE_COMMANDS[@]} -eq 0 && ${#SCALE_ENVVARS[@]} -eq 0 ]]
+  then
+    echo "No action required"
+    return 0
+  fi
+
+  # if dry run, print commands + env updates instead of performing them
+  if [[ -n "$OPT_DRY_RUN" ]]; then
+      echo "!DRY RUN!"
+  fi
+  # docker scale commands 
+  for service in "${!SCALE_COMMANDS[@]}"
+  do
+    if [[ -n "$OPT_DRY_RUN" ]]; then
+        echo "${SCALE_COMMANDS[$service]}"
+    else
+      ${SCALE_COMMANDS[$service]}
+      services_changed[$service]=1
+    fi
+  done
+  # env updates
+  for service in "${!SCALE_ENVVARS[@]}"
+  do
+    if [[ -n "$OPT_DRY_RUN" ]]; then
+        echo "${SCALE_ENVVARS[$service]}"
+    else
+      ${SCALE_ENVVARS[$service]}
+      services_changed[$service]=1
+    fi
+  done
+
+  log_scale
+}
+
 run_hook() (
   local hook hook_name
   [[ -d "$HOOKS_DIR" ]] || return 0
@@ -1259,6 +1486,11 @@ longopt=(
   autoupdate-registry:
   autoupdate-tag:
   all-tags:
+
+  # autoscaling
+  allow-downscale
+  reset-scale
+  dry-run
 )
 # format options array to comma-separated string for getopt
 longopt=$(IFS=,; echo "${longopt[*]}")
@@ -1401,6 +1633,18 @@ while true; do
       CURL_OPTS=(--max-time 60 --retry 5 --retry-delay 1 --retry-max-time 0)
       shift 1
       ;;
+    --allow-downscale)
+      OPT_ALLOW_DOWNSCALE=1
+      shift 1
+      ;;
+    --reset-scale)
+      OPT_RESET=1
+      shift 1
+      ;;
+    --dry-run)
+      OPT_DRY_RUN=1
+      shift 1
+      ;;
     -h|--help) usage; exit 0 ;;
     --) shift ; break ;;
     *) usage; exit 1 ;;
@@ -1452,6 +1696,11 @@ for arg; do
           [[ -n "$DOCKER_IMAGE_TAG_AUTOUPDATE" ]] || {
         fatal "Need at least one image name or tag for update"
       }
+      shift 1
+      ;;
+    autoscale)
+      [[ -z "$MODE" ]] || { usage; exit 2; }
+      MODE=autoscale
       shift 1
       ;;
     *)
@@ -1584,6 +1833,15 @@ case "$MODE" in
       append_metadata "$PROJECT_DIR" "No HAProxy config added (--local-only)"
     add_to_haproxy_cfg
     run_hook "post-${MODE}"
+    # read accounts for autoscale
+    if [[ -f "${PROJECT_DIR}/metadata.txt" ]]; then
+      ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
+      if [[ -n "$ACCOUNTS" ]]; then
+        # initially set to non-power mode (= --reset)
+        OPT_RESET=1
+        instance_autoscale
+      fi
+    fi
     ask_start
     ;;
   clone)
@@ -1652,6 +1910,11 @@ case "$MODE" in
     arg_check || { usage; exit 2; }
     instance_update
     run_hook "post-${MODE}"
+    ;;
+  autoscale)
+    [[ -f "$CONFIG" ]] && echo "Applying options from ${CONFIG}." || true
+    arg_check || { usage; exit 2; }
+    instance_autoscale
     ;;
   *)
     fatal "Missing command.  Please consult $ME --help."
