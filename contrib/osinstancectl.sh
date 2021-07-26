@@ -173,6 +173,8 @@ Options:
     --allow-downscale  Without this option services will only be scaled upward to
                        to prevent possibly undoing manual scaling adjusmtents
     --reset            Reset all scaling back to normal
+    --accounts         Specify the number of acoounts to scale for overriding
+                       read from metadata.txt
     --dry-run          Print out actions instead of actually performing them
 
 Colored status indicators in ls mode:
@@ -1341,7 +1343,7 @@ instance_autoscale() {
   if [[ -n "$OPT_RESET" ]]; then
     echo "Resetting scalings of $PROJECT_NAME:"
   else
-    echo "$PROJECT_NAME is set to handle $ACCOUNTS accounts."
+    echo "$PROJECT_NAME is will be scaled to handle $ACCOUNTS accounts."
   fi
   printf "$fmt_str" "<service>" "<scale from>" "<scale to>"
   # body
