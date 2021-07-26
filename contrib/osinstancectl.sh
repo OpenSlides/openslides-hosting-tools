@@ -1490,6 +1490,7 @@ longopt=(
   # autoscaling
   allow-downscale
   reset-scale
+  accounts:
   dry-run
 )
 # format options array to comma-separated string for getopt
@@ -1640,6 +1641,10 @@ while true; do
     --reset-scale)
       OPT_RESET=1
       shift 1
+      ;;
+    --accounts)
+      ACCOUNTS="$2"
+      shift 2
       ;;
     --dry-run)
       OPT_DRY_RUN=1

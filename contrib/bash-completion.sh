@@ -12,7 +12,7 @@ _osinstancectl()
   opts+=" --autoupdate-registry --autoupdate-tag"
   opts+=" --local-only --no-add-account"
   opts+=" --yaml-template --env-template"
-  opts+=" --reset --allow-downscale --dry-run"
+  opts+=" --reset --allow-downscale --accounts --dry-run"
   diropts="ls|rm|start|stop|update|erase|autoscale|--clone-from"
 
   if [[ ${prev} =~ ${diropts} ]]; then
