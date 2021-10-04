@@ -20,8 +20,7 @@ set -o pipefail
 # Defaults (override in /etc/osinstancectl)
 TEMPLATE_REPO="/srv/openslides/OpenSlides"
 # TEMPLATE_REPO="https://github.com/OpenSlides/openslides-docker-compose"
-OSDIR="/srv/openslides"
-INSTANCES="${OSDIR}/docker-instances"
+INSTANCES="/srv/openslides/os4-instances"
 YAML_TEMPLATE= # leave empty for automatic (default)
 DOT_ENV_TEMPLATE=
 HOOKS_DIR=
@@ -214,7 +213,7 @@ check_for_dependency () {
 }
 
 arg_check() {
-  [[ -d "$OSDIR" ]] || { fatal "$OSDIR not found!"; }
+  [[ -d "$INSTANCES" ]] || { fatal "$INSTANCES not found!"; }
   [[ -n "$PROJECT_NAME" ]] || {
     fatal "Please specify a project name"; return 2;
   }
