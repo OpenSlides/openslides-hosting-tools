@@ -246,8 +246,8 @@ arg_check() {
 
 marker_check() {
   [[ -f "${PROJECT_DIR}/${MARKER}" ]] || {
-    fatal "This instance was not created with $ME." \
-      "Refusing to delete unless --force is given."
+    fatal "This instance was not created with $ME."
+    return 1
   }
 }
 
@@ -1807,7 +1807,8 @@ DOT_ENV_TEMPLATE="${DOT_ENV_TEMPLATE:-${DEFAULT_DOT_ENV_TEMPLATE}}"
 case "$MODE" in
   remove)
     arg_check || { usage; exit 2; }
-    [[ -n "$OPT_FORCE" ]] || marker_check
+    [[ -n "$OPT_FORCE" ]] || marker_check ||
+      fatal "Refusing to delete unless --force is given."
     # Ask for confirmation
     ANS=
     echo "Delete the following instance including all of its data and configuration?"
