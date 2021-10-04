@@ -32,6 +32,7 @@ PROJECT_STACK_NAME=
 PORT=
 DEPLOYMENT_MODE=
 MODE=
+DOCKER_IMAGE_TAG_OPENSLIDES=latest
 ACCOUNTS=
 AUTOSCALE_ACCOUNTS_OVER=
 AUTOSCALE_RESET_ACCOUNTS_OVER=
@@ -128,14 +129,7 @@ Options:
     -j, --json         Enable JSON output format
 
   for add & update:
-    --backend-registry Specify the OpenSlides server Docker image name
-    --backend-tag      Specify the OpenSlides server Docker image tag
-    --frontend-registry Specify the OpenSlides client Docker image name
-    --frontend-tag     Specify the OpenSlides client Docker image tag
-    --autoupdate-image Specify the OpenSlides autoupdate service Docker image name
-    --autoupdate-tag   Specify the OpenSlides autoupdate service Docker image tag
-    -t, --all-tags     Specify the image tags for all OpenSlides components
-                       (see above)
+    -t, --tag          Specify the image tags for all OpenSlides components
     --local-only       Create an instance without setting up HAProxy and Let's
                        Encrypt certificates.  Such an instance is only
                        accessible on localhost, e.g., http://127.0.0.1:61000.
@@ -195,10 +189,6 @@ arg_check() {
       }
       ;;
   esac
-  echo "$DOCKER_IMAGE_REGISTRY_OPENSLIDES" \
-    "$DOCKER_IMAGE_REGISTRY_CLIENT" \
-    "$DOCKER_IMAGE_REGISTRY_AUTOUPDATE" |
-    grep -q -v '[/:]' || fatal "Illegal character in registry."
 }
 
 marker_check() {
@@ -777,64 +767,19 @@ instance_erase() {
 }
 
 instance_update() {
-  local server_changed= client_changed=
-  local autoupdate_changed=
-
   log_update() { # Append to metadata
     if [[ -n "$server_changed" ]]; then
-      append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated server to" \
-        "${DOCKER_IMAGE_OPENSLIDES}:${DOCKER_IMAGE_TAG_OPENSLIDES}"
-    fi
-    if [[ -n "$client_changed" ]]; then
-      append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated client to" \
-        "${DOCKER_IMAGE_CLIENT}:${DOCKER_IMAGE_TAG_CLIENT}"
-    fi
-    if [[ -n "$autoupdate_changed" ]]; then
-      append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated autoupdate to" \
-        "${DOCKER_IMAGE_AUTOUPDATE}:${DOCKER_IMAGE_TAG_AUTOUPDATE}"
+      append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated all services to" "${DOCKER_IMAGE_TAG_OPENSLIDES}"
     fi
   }
 
-  # Update values in .env
-  # Backend
-  if [[ -n "$DOCKER_IMAGE_REGISTRY_OPENSLIDES" ]]; then
-    update_env_file "${PROJECT_DIR}/.env" \
-      "DOCKER_OPENSLIDES_BACKEND_REGISTRY" "$DOCKER_IMAGE_REGISTRY_OPENSLIDES" --force
-    DOCKER_IMAGE_OPENSLIDES="${DOCKER_IMAGE_REGISTRY_OPENSLIDES}/${DOCKER_IMAGE_NAME_OPENSLIDES}"
-    server_changed=1
-  fi
-  if [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]]; then
-    update_env_file "${PROJECT_DIR}/.env" \
-      "DOCKER_OPENSLIDES_BACKEND_TAG" "$DOCKER_IMAGE_TAG_OPENSLIDES" --force
-    server_changed=1
-  fi
-  # Frontend
-  if [[ -n "$DOCKER_IMAGE_REGISTRY_CLIENT" ]]; then
-    update_env_file "${PROJECT_DIR}/.env" \
-      "DOCKER_OPENSLIDES_FRONTEND_REGISTRY" "$DOCKER_IMAGE_REGISTRY_CLIENT" --force
-    DOCKER_IMAGE_CLIENT="${DOCKER_IMAGE_REGISTRY_CLIENT}/${DOCKER_IMAGE_NAME_CLIENT}"
-    client_changed=1
-  fi
-  if [[ -n "$DOCKER_IMAGE_TAG_CLIENT" ]]; then
-    update_env_file "${PROJECT_DIR}/.env" \
-      "DOCKER_OPENSLIDES_FRONTEND_TAG" "$DOCKER_IMAGE_TAG_CLIENT" --force
-    client_changed=1
-  fi
-  # Autoupdate
-  if [[ -n "$DOCKER_IMAGE_REGISTRY_AUTOUPDATE" ]]; then
-    update_env_file "${PROJECT_DIR}/.env" \
-      "DOCKER_OPENSLIDES_AUTOUPDATE_REGISTRY" "$DOCKER_IMAGE_REGISTRY_AUTOUPDATE" --force
-    DOCKER_IMAGE_AUTOUPDATE="${DOCKER_IMAGE_REGISTRY_AUTOUPDATE}/${DOCKER_IMAGE_NAME_AUTOUPDATE}"
-    autoupdate_changed=1
-  fi
-  if [[ -n "$DOCKER_IMAGE_TAG_AUTOUPDATE" ]]; then
-    update_env_file "${PROJECT_DIR}/.env" \
-      "DOCKER_OPENSLIDES_AUTOUPDATE_TAG" "$DOCKER_IMAGE_TAG_AUTOUPDATE" --force
-    autoupdate_changed=1
-  fi
+  # TODO
+  fatal "not implemented"
+  # This will require very careful handling, including migrations
 
-  # Start/update if instance was already running
-  source "${PROJECT_DIR}/.env"
+  # Update values in config.yml
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
 
   instance_has_services_running "$PROJECT_STACK_NAME" || {
     echo "WARN: ${PROJECT_NAME} is not running."
@@ -850,66 +795,7 @@ instance_update() {
       _docker_compose "$PROJECT_DIR" up -d
       ;;
     "stack")
-      # Set missing variables from currently running service
-      # Backend
-      if [[ -z "$DOCKER_IMAGE_OPENSLIDES" ]] && [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]]; then
-        DOCKER_IMAGE_OPENSLIDES="$(docker service inspect \
-          -f '{{.Spec.TaskTemplate.ContainerSpec.Image}}' \
-          "$PROJECT_STACK_NAME"_server |
-          gawk -F '[:@]' '{ print $1 }')"
-      elif [[ -n "$DOCKER_IMAGE_OPENSLIDES" ]] && [[ -z "$DOCKER_IMAGE_TAG_OPENSLIDES" ]]; then
-        DOCKER_IMAGE_TAG_OPENSLIDES="$(docker service inspect \
-          -f '{{.Spec.TaskTemplate.ContainerSpec.Image}}' \
-          "$PROJECT_STACK_NAME"_server |
-          gawk -F '[:@]' '{ print $2 }')"
-      fi
-      # Frontend
-      if [[ -z "$DOCKER_IMAGE_CLIENT" ]] && [[ -n "$DOCKER_IMAGE_TAG_CLIENT" ]]; then
-        DOCKER_IMAGE_CLIENT="$(docker service inspect \
-          -f '{{.Spec.TaskTemplate.ContainerSpec.Image}}' \
-          "$PROJECT_STACK_NAME"_client |
-          gawk -F '[:@]' '{ print $1 }')"
-      elif [[ -n "$DOCKER_IMAGE_CLIENT" ]] && [[ -z "$DOCKER_IMAGE_TAG_CLIENT" ]]; then
-        DOCKER_IMAGE_TAG_CLIENT="$(docker service inspect \
-          -f '{{.Spec.TaskTemplate.ContainerSpec.Image}}' \
-          "$PROJECT_STACK_NAME"_client |
-          gawk -F '[:@]' '{ print $2 }')"
-      fi
-      # Autoupdate
-      if [[ -z "$DOCKER_IMAGE_AUTOUPDATE" ]] && [[ -n "$DOCKER_IMAGE_TAG_AUTOUPDATE" ]]; then
-        DOCKER_IMAGE_AUTOUPDATE="$(docker service inspect \
-          -f '{{.Spec.TaskTemplate.ContainerSpec.Image}}' \
-          "$PROJECT_STACK_NAME"_autoupdate |
-          gawk -F '[:@]' '{ print $1 }')"
-      elif [[ -n "$DOCKER_IMAGE_AUTOUPDATE" ]] && [[ -z "$DOCKER_IMAGE_TAG_AUTOUPDATE" ]]; then
-        DOCKER_IMAGE_TAG_AUTOUPDATE="$(docker service inspect \
-          -f '{{.Spec.TaskTemplate.ContainerSpec.Image}}' \
-          "$PROJECT_STACK_NAME"_autoupdate |
-          gawk -F '[:@]' '{ print $2 }')"
-      fi
-
-      # Update services
-      # ---------------
-      # Backend
-      if [[ "$server_changed" ]]; then
-        for i in server-setup server; do
-          docker service update --image \
-            "${DOCKER_IMAGE_OPENSLIDES}:${DOCKER_IMAGE_TAG_OPENSLIDES}" \
-            "${PROJECT_STACK_NAME}_${i}"
-        done
-      fi
-      # Frontend
-      if [[ "$client_changed" ]]; then
-        docker service update --image \
-          "${DOCKER_IMAGE_CLIENT}:${DOCKER_IMAGE_TAG_CLIENT}" \
-          "${PROJECT_STACK_NAME}_client"
-      fi
-      # Autoupdate
-      if [[ "$autoupdate_changed" ]]; then
-        docker service update --image \
-          "${DOCKER_IMAGE_AUTOUPDATE}:${DOCKER_IMAGE_TAG_AUTOUPDATE}" \
-          "${PROJECT_STACK_NAME}_autoupdate"
-      fi
+      instance_start
       ;;
   esac
 
@@ -1190,13 +1076,7 @@ longopt=(
   www
 
   # adding & upgrading instances
-  backend-registry:
-  backend-tag:
-  frontend-registry:
-  frontend-tag:
-  autoupdate-registry:
-  autoupdate-tag:
-  all-tags:
+  tag:
 
   # autoscaling
   allow-downscale
@@ -1234,34 +1114,8 @@ while true; do
       [[ -r "$CONFIG_YML_TEMPLATE" ]] || fatal "$CONFIG_YML_TEMPLATE not found."
       shift 2
       ;;
-    --backend-registry)
-      DOCKER_IMAGE_REGISTRY_OPENSLIDES="$2"
-      shift 2
-      ;;
-    --backend-tag)
+    -t|--tag)
       DOCKER_IMAGE_TAG_OPENSLIDES="$2"
-      shift 2
-      ;;
-    --frontend-registry)
-      DOCKER_IMAGE_REGISTRY_CLIENT="$2"
-      shift 2
-      ;;
-    --frontend-tag)
-      DOCKER_IMAGE_TAG_CLIENT="$2"
-      shift 2
-      ;;
-    --autoupdate-registry)
-      DOCKER_IMAGE_REGISTRY_AUTOUPDATE="$2"
-      shift 2
-      ;;
-    --autoupdate-tag)
-      DOCKER_IMAGE_TAG_AUTOUPDATE="$2"
-      shift 2
-      ;;
-    -t|--all-tags)
-      DOCKER_IMAGE_TAG_OPENSLIDES="$2"
-      DOCKER_IMAGE_TAG_CLIENT="$2"
-      DOCKER_IMAGE_TAG_AUTOUPDATE="$2"
       shift 2
       ;;
     -a|--all)
@@ -1398,14 +1252,8 @@ for arg; do
     update)
       [[ -z "$MODE" ]] || { usage; exit 2; }
       MODE=update
-      [[ -n "$DOCKER_IMAGE_REGISTRY_OPENSLIDES" ]] ||
-          [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] ||
-          [[ -n "$DOCKER_IMAGE_REGISTRY_CLIENT" ]] ||
-          [[ -n "$DOCKER_IMAGE_TAG_CLIENT" ]] ||
-          [[ -n "$DOCKER_IMAGE_REGISTRY_AUTOUPDATE" ]] ||
-          [[ -n "$DOCKER_IMAGE_TAG_AUTOUPDATE" ]] || {
+      [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] ||
         fatal "Need at least one image name or tag for update"
-      }
       shift 1
       ;;
     autoscale)
