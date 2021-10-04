@@ -18,11 +18,9 @@ set -o noclobber
 set -o pipefail
 
 # Defaults (override in /etc/osinstancectl)
-TEMPLATE_REPO="/srv/openslides/OpenSlides"
-# TEMPLATE_REPO="https://github.com/OpenSlides/openslides-docker-compose"
 INSTANCES="/srv/openslides/os4-instances"
-YAML_TEMPLATE= # leave empty for automatic (default)
-DOT_ENV_TEMPLATE=
+COMPOSE_TEMPLATE=
+CONFIG_YML_TEMPLATE=
 HOOKS_DIR=
 
 ME=$(basename -s .sh "${BASH_SOURCE[0]}")
@@ -55,7 +53,6 @@ OPT_SECRETS=
 OPT_METADATA=
 OPT_METADATA_SEARCH=
 OPT_JSON=
-OPT_ADD_ACCOUNT=1
 OPT_LOCALONLY=
 OPT_FORCE=
 OPT_ALLOW_DOWNSCALE=
@@ -69,11 +66,6 @@ FILTER_STATE=
 FILTER_VERSION=
 CLONE_FROM=
 ADMIN_SECRETS_FILE="superadmin"
-USER_SECRETS_FILE="usersecret.env"
-OPENSLIDES_USER_FIRSTNAME=
-OPENSLIDES_USER_LASTNAME=
-OPENSLIDES_USER_EMAIL=
-OPENSLIDES_USER_PASSWORD=
 DEFAULT_DOCKER_REGISTRY=
 OPT_PRECISE_PROJECT_NAME=
 CURL_OPTS=(--max-time 1 --retry 2 --retry-delay 1 --retry-max-time 3)
@@ -126,8 +118,8 @@ Actions:
 
 Options:
   -d, --project-dir    Directly specify the project directory
-  --yaml-template      Specify a YAML template
-  --env-template       Specify a .env template
+  --compose-template   Specify a YAML template
+  --config-template    Specify a .env template
   --force              Disable various safety checks
   --color=WHEN         Enable/disable color output.  WHEN is never, always, or
                        auto.
@@ -157,7 +149,6 @@ Options:
     --autoupdate-tag   Specify the OpenSlides autoupdate service Docker image tag
     -t, --all-tags     Specify the image tags for all OpenSlides components
                        (see above)
-    --no-add-account   Do not add an additional, customized local admin account
     --local-only       Create an instance without setting up HAProxy and Let's
                        Encrypt certificates.  Such an instance is only
                        accessible on localhost, e.g., http://127.0.0.1:61000.
@@ -187,24 +178,6 @@ fatal() {
     exit 23
 }
 
-check_config_compatibility() {
-  # XXX: During transition period, check that the YAML template and given
-  # instance's .env configuration are either consistently based on a legacy OS3
-  # or OS3+ setup
-  local legacy_yaml=0 legacy_env=0
-  grep -q DOCKER_OPENSLIDES_AUTOUPDATE_REGISTRY "$DCCONFIG_TEMPLATE"  || legacy_yaml=1
-  if [[ -f "${PROJECT_DIR}/.env" ]]; then
-    # prevent start
-    grep -q DOCKER_OPENSLIDES_AUTOUPDATE_REGISTRY "${PROJECT_DIR}/.env" || legacy_env=1
-  else
-    # prevent create
-    grep -q DOCKER_OPENSLIDES_AUTOUPDATE_REGISTRY "${DOT_ENV_TEMPLATE}" || legacy_env=1
-  fi
-  if [[ $legacy_env -ne $legacy_yaml ]]; then
-    fatal "Incompatible configuration (OS3 vs. OS3+?)"
-  fi
-}
-
 check_for_dependency () {
     [[ -n "$1" ]] || return 0
     which "$1" > /dev/null || { fatal "Dependency not found: $1"; }
@@ -220,7 +193,7 @@ arg_check() {
       [[ -d "$PROJECT_DIR" ]] || {
         fatal "Instance '${PROJECT_NAME}' not found."
       }
-      [[ -f "${PROJECT_DIR}/${CONFIG_FILE}" ]] || {
+      [[ -f "${DCCONFIG}" ]] || {
         fatal "Not a ${DEPLOYMENT_MODE} instance."
       }
       ;;
@@ -253,20 +226,7 @@ _docker_compose () {
   local project_dir="$1"
   shift
   docker-compose --project-directory "$project_dir" \
-    --file "${project_dir}/${CONFIG_FILE}" "$@"
-}
-
-query_user_account_name() {
-  if [[ -n "$OPT_ADD_ACCOUNT" ]]; then
-    echo "Create local admin account for:"
-    while [[ -z "$OPENSLIDES_USER_FIRSTNAME" ]] || \
-          [[ -z "$OPENSLIDES_USER_LASTNAME" ]]
-    do
-      read -rp "First & last name: " \
-        OPENSLIDES_USER_FIRSTNAME OPENSLIDES_USER_LASTNAME
-      read -rp "Email (optional): " OPENSLIDES_USER_EMAIL
-    done
-  fi
+    --file "${project_dir}/${DCCONFIG_FILENAME}" "$@"
 }
 
 next_free_port() {
@@ -279,9 +239,8 @@ next_free_port() {
   local HIGHEST_PORT_IN_USE
   local PORT
   HIGHEST_PORT_IN_USE=$(
-    find "${INSTANCES}" -type f -name ".env" -print0 |
-    xargs -0 grep -h "EXTERNAL_HTTP_PORT" |
-    cut -d= -f2 | tr -d "[\"\']" | sort -rn | head -1
+    find "${INSTANCES}" -type f -name "config.yml" -print0 |
+    xargs -0 yq --no-doc eval '.port' | sort -rn | head -1
   )
   [[ -n "$HIGHEST_PORT_IN_USE" ]] || HIGHEST_PORT_IN_USE=61000
   PORT=$((HIGHEST_PORT_IN_USE + 1))
@@ -300,119 +259,44 @@ next_free_port() {
 }
 
 update_env_file() {
-  # This function updates variables in given .env files.
-  # The variable to be updated must already be present in the file; the
-  # function can not be used to add new values to the .env file!
-  [[ -f "$1" ]] || fatal "$1 not found."
-  # Exit if variable is non-empty because it indicates a template customization
-  [[ "${4:-NOFORCE}" = "--force" ]] || ( set +u; source "$1" && [[ -z "${!2}" ]] ) || return 0
-  local temp_file="$(mktemp)"
-  gawk -v env_var_name="$2" -v env_var_val="$3" '
-    BEGIN { FS = "="; OFS=FS }
-    $1 == env_var_name { $2 = env_var_val; s=1 }
-    1
-    # TODO: --force could be leveraged to enable appending variables not
-    # already present in the template:
-    # END { if (!s) printf("%s=%s\n", env_var_name, env_var_val) }
-  ' "$1" >| "$temp_file"
-  cp -f "$temp_file" "$1"
-  rm "$temp_file"
+  local file=$1
+  local expr=$2
+  $YQ eval -i "$expr" "$file"
 }
 
-create_config_from_template() {
-  local _env="${PROJECT_DIR}/.env"
-  local temp_file
-  temp_file="$(mktemp)"
-  # Create .env
-  [[ ! -f "${_env}" ]] || cp -af "${_env}" "$temp_file"
-  update_env_file "$temp_file" "ALLOWED_HOSTS" "\"127.0.0.1 ${PROJECT_NAME} www.${PROJECT_NAME}\""
-  update_env_file "$temp_file" "EXTERNAL_HTTP_PORT" "$PORT"
-  update_env_file "$temp_file" "INSTANCE_DOMAIN" "${PROJECT_NAME}"
-  update_env_file "$temp_file" "INSTANCE_URL_SCHEME" "http"
-  update_env_file "$temp_file" "DEFAULT_DOCKER_REGISTRY" "$DEFAULT_DOCKER_REGISTRY"
-  update_env_file "$temp_file" "DOCKER_OPENSLIDES_BACKEND_REGISTRY" "$DOCKER_IMAGE_REGISTRY_OPENSLIDES"
-  update_env_file "$temp_file" "DOCKER_OPENSLIDES_BACKEND_TAG" "$DOCKER_IMAGE_TAG_OPENSLIDES"
-  update_env_file "$temp_file" "DOCKER_OPENSLIDES_FRONTEND_REGISTRY" "$DOCKER_IMAGE_REGISTRY_CLIENT"
-  update_env_file "$temp_file" "DOCKER_OPENSLIDES_FRONTEND_TAG" "$DOCKER_IMAGE_TAG_CLIENT"
-  update_env_file "$temp_file" "DOCKER_OPENSLIDES_AUTOUPDATE_REGISTRY" "$DOCKER_IMAGE_REGISTRY_AUTOUPDATE"
-  update_env_file "$temp_file" "DOCKER_OPENSLIDES_AUTOUPDATE_TAG" "$DOCKER_IMAGE_TAG_AUTOUPDATE"
-  update_env_file "$temp_file" "POSTFIX_MYHOSTNAME" "$PROJECT_NAME"
-
-  cp -af "$temp_file" "${_env}"
-  # Create config from template + .env
-  ( set -a && source "${_env}" &&
-    m4 -DPROJECT_DIR="$PROJECT_DIR" "$DCCONFIG_TEMPLATE" > "${DCCONFIG}" )
-  rm -rf "$temp_file" # TODO: trap
+recreate_compose_yml() {
+  local template= config=
+  [[ -z "$COMPOSE_TEMPLATE" ]] ||
+    template="--template=${COMPOSE_TEMPLATE}"
+  [[ -z "$CONFIG_YML_TEMPLATE" ]] ||
+    config="--config=${CONFIG_YML_TEMPLATE}"
+  openslides config $template $config \
+    --config="${PROJECT_DIR}/config.yml" "${PROJECT_DIR}"
 }
 
 create_instance_dir() {
-  case "$DEPLOYMENT_MODE" in
-    "compose")
-      git clone "${TEMPLATE_REPO}" "${PROJECT_DIR}"
-      ln -s docker/docker-compose.yml.m4 "${PROJECT_DIR}/docker-compose.yml.m4"
-      cp "${TEMPLATE_REPO}/docker/.env" "${PROJECT_DIR}/.env"
-      ;;
-    "stack")
-      # If the template repo is a local worktree, copy files from it
-      if [[ -d "${TEMPLATE_REPO}" ]]; then
-        mkdir -p "${PROJECT_DIR}"
-      else
-        # Template repo appears to be remote, so clone it
-        git clone "${TEMPLATE_REPO}" "${PROJECT_DIR}"
-        ln -s docker/docker-stack.yml.m4 "${PROJECT_DIR}/docker-stack.yml.m4"
-        cp docker/.env "${PROJECT_DIR}/.env"
-      fi
-      ;;
-  esac
-  mkdir -p -m 700 "${PROJECT_DIR}/secrets"
-  touch "${PROJECT_DIR}/${MARKER}"
-  # Add .env if template available
-  [[ ! -f "$DOT_ENV_TEMPLATE" ]] || cp -af "$DOT_ENV_TEMPLATE" "${PROJECT_DIR}/.env"
-  # Add stack name to .env file
-  update_env_file "${PROJECT_DIR}/.env" "PROJECT_STACK_NAME" "$PROJECT_STACK_NAME"
+  local template= config=
+  [[ -z "$COMPOSE_TEMPLATE" ]] ||
+    template="--template=${COMPOSE_TEMPLATE}"
+  [[ -z "$CONFIG_YML_TEMPLATE" ]] ||
+    config="--config=${CONFIG_YML_TEMPLATE}"
+
+  openslides setup $template $config "$PROJECT_DIR" ||
+    fatal 'Error during `openslides setup`'
+  touch "${PROJECT_DIR}/config.yml"
+  update_config_yml "${PROJECT_DIR}/config.yml" ".port = $PORT"
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".stackName = \"$PROJECT_STACK_NAME\""
+
+  # TODO: still necessary for OS4?
+  # update_env_file "$temp_file" "ALLOWED_HOSTS" "\"127.0.0.1 ${PROJECT_NAME} www.${PROJECT_NAME}\""
+  # update_env_file "$temp_file" "INSTANCE_URL_SCHEME" "http"
 }
 
 gen_pw() {
   local len="${1:-15}"
   read -r -n "$len" PW < <(LC_ALL=C tr -dc "[:alnum:]" < /dev/urandom)
   echo "$PW"
-}
-
-create_admin_secrets_file() {
-  echo "Generating admin password..."
-  [[ -d "${PROJECT_DIR}/secrets" ]] ||
-    mkdir -m 700 "${PROJECT_DIR}/secrets"
-  printf "OPENSLIDES_ADMIN_PASSWORD=%s\n" "$(gen_pw)" \
-    > "${PROJECT_DIR}/secrets/${ADMIN_SECRETS_FILE}"
-}
-
-create_user_secrets_file() {
-  if [[ -n "$OPT_ADD_ACCOUNT" ]]; then
-    local first_name
-    local last_name
-    local email # optional
-    local PW
-    echo "Generating user credentials..."
-    [[ -d "${PROJECT_DIR}/secrets" ]] ||
-      mkdir -m 700 "${PROJECT_DIR}/secrets"
-    first_name="$1"
-    last_name="$2"
-    email="$3"
-    PW="$(gen_pw)"
-    cat << EOF > "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
-# Configured by $ME:
-OPENSLIDES_USER_FIRSTNAME="$first_name"
-OPENSLIDES_USER_LASTNAME="$last_name"
-OPENSLIDES_USER_PASSWORD="$PW"
-OPENSLIDES_USER_EMAIL="$email"
-EOF
-  fi
-}
-
-create_django_secrets_file() {
-  echo "Generating Django secret key..."
-  printf "DJANGO_SECRET_KEY='%s'\n" "$(gen_pw 64)" \
-    > "${PROJECT_DIR}/secrets/django.env"
 }
 
 add_to_haproxy_cfg() {
@@ -538,7 +422,7 @@ ls_instance() {
   local user_name=
   local OPENSLIDES_ADMIN_PASSWORD="—"
 
-  [[ -f "${instance}/${CONFIG_FILE}" ]] && [[ -f "${instance}/config.yml" ]] ||
+  [[ -f "${instance}/${DCCONFIG_FILENAME}" ]] && [[ -f "${instance}/config.yml" ]] ||
     fatal "$shortname is not a $DEPLOYMENT_MODE instance."
 
   #  For stacks, get the normalized shortname
@@ -628,7 +512,7 @@ ls_instance() {
     while read -r service version; do
       service_versions[$service]=$version
     done < <($YQ eval '.services.*.image | {(path | join(".")): .}' \
-        "${instance}/${CONFIG_FILE}" |
+        "${instance}/${DCCONFIG_FILENAME}" |
       awk -F': ' '{ split($1, a, /\./); print a[2], $2}')
   fi
 
@@ -789,7 +673,7 @@ list_instances() {
   )
   for instance in "${i[@]}"; do
     # skip directories that aren't instances
-    [[ -f "${instance}/${CONFIG_FILE}" ]] && [[ -f "${instance}/.env" ]] || continue
+    [[ -f "${instance}/${DCCONFIG_FILENAME}" ]] && [[ -f "${instance}/config.yml" ]] || continue
 
     # Filter instances
     # 1. instance name/project dir matches (case-insensitive)
@@ -947,17 +831,14 @@ ask_start() {
 }
 
 instance_start() {
-  check_config_compatibility
-  # Write YAML config
-  ( set -a  && source "${PROJECT_DIR}/.env" &&
-    m4 -DPROJECT_DIR="$PROJECT_DIR" "$DCCONFIG_TEMPLATE" >| "${DCCONFIG}" )
+  # Re-generate docker-compose.yml/docker-stack.yml
+  recreate_compose_yml
   case "$DEPLOYMENT_MODE" in
     "compose")
-      _docker_compose "$PROJECT_DIR" build
       _docker_compose "$PROJECT_DIR" up -d
       ;;
     "stack")
-      PROJECT_STACK_NAME="$(value_from_env "${PROJECT_DIR}" PROJECT_STACK_NAME)"
+      PROJECT_STACK_NAME="$(value_from_config_yml "$PROJECT_DIR" '.stackName')"
       docker stack deploy -c "${PROJECT_DIR}/docker-stack.yml" \
         "$PROJECT_STACK_NAME"
       ;;
@@ -970,7 +851,6 @@ instance_stop() {
       _docker_compose "$PROJECT_DIR" down
       ;;
     "stack")
-      PROJECT_STACK_NAME="$(value_from_env "${PROJECT_DIR}" PROJECT_STACK_NAME)"
       docker stack rm "$PROJECT_STACK_NAME"
     ;;
 esac
@@ -1395,8 +1275,8 @@ longopt=(
   force
 
   # Template opions
-  yaml-template:
-  env-template:
+  compose-template:
+  config-template:
 
   # filtering
   all
@@ -1412,7 +1292,6 @@ longopt=(
   # adding instances
   clone-from:
   local-only
-  no-add-account
   www
 
   # adding & upgrading instances
@@ -1450,12 +1329,14 @@ while true; do
       PROJECT_DIR="$2"
       shift 2
       ;;
-    --yaml-template)
-      YAML_TEMPLATE="$2"
+    --compose-template)
+      COMPOSE_TEMPLATE="$2"
+      [[ -r "$COMPOSE_TEMPLATE" ]] || fatal "$COMPOSE_TEMPLATE not found."
       shift 2
       ;;
-    --env-template)
-      DOT_ENV_TEMPLATE="$2"
+    --config-template)
+      CONFIG_YML_TEMPLATE="$2"
+      [[ -r "$CONFIG_YML_TEMPLATE" ]] || fatal "$CONFIG_YML_TEMPLATE not found."
       shift 2
       ;;
     --backend-registry)
@@ -1487,10 +1368,6 @@ while true; do
       DOCKER_IMAGE_TAG_CLIENT="$2"
       DOCKER_IMAGE_TAG_AUTOUPDATE="$2"
       shift 2
-      ;;
-    --no-add-account)
-      OPT_ADD_ACCOUNT=
-      shift 1
       ;;
     -a|--all)
       OPT_LONGLIST=1
@@ -1673,6 +1550,7 @@ DEPS=(
   yq
   m4
   nc
+  openslides
 )
 case "$DEPLOYMENT_MODE" in
   "compose")
@@ -1715,26 +1593,13 @@ PROJECT_STACK_NAME="$(echo "$PROJECT_NAME" | tr -d '.')"
 
 case "$DEPLOYMENT_MODE" in
   "compose")
-    CONFIG_FILE="docker-compose.yml"
+    DCCONFIG_FILENAME="docker-compose.yml"
     ;;
   "stack")
-    CONFIG_FILE="docker-stack.yml"
+    DCCONFIG_FILENAME="docker-stack.yml"
     ;;
 esac
-DCCONFIG="${PROJECT_DIR}/${CONFIG_FILE}"
-
-# If a template repo exists as a local worktree, copy files from there;
-# otherwise, clone a repo and use its included files as templates
-if [[ -d "${TEMPLATE_REPO}" ]]; then
-  DEFAULT_DCCONFIG_TEMPLATE="${TEMPLATE_REPO}/docker/${CONFIG_FILE}.m4"
-  DEFAULT_DOT_ENV_TEMPLATE="${TEMPLATE_REPO}/docker/.env"
-else
-  DEFAULT_DCCONFIG_TEMPLATE="${PROJECT_DIR}/docker/${CONFIG_FILE}.m4"
-  DEFAULT_DOT_ENV_TEMPLATE="${PROJECT_DIR}/docker/.env"
-fi
-# Override default settings from either the config file or command-line options
-DCCONFIG_TEMPLATE="${YAML_TEMPLATE:-${DEFAULT_DCCONFIG_TEMPLATE}}"
-DOT_ENV_TEMPLATE="${DOT_ENV_TEMPLATE:-${DEFAULT_DOT_ENV_TEMPLATE}}"
+DCCONFIG="${PROJECT_DIR}/${DCCONFIG_FILENAME}"
 
 case "$MODE" in
   remove)
@@ -1755,17 +1620,13 @@ case "$MODE" in
   create)
     [[ -f "$CONFIG" ]] && echo "Applying options from ${CONFIG}." || true
     arg_check || { usage; exit 2; }
-    check_config_compatibility
     # Use defaults in the absence of options
-    query_user_account_name
     echo "Creating new instance: $PROJECT_NAME"
     PORT=$(next_free_port)
     create_instance_dir
-    create_config_from_template
-    create_admin_secrets_file
-    create_user_secrets_file "${OPENSLIDES_USER_FIRSTNAME}" \
-      "${OPENSLIDES_USER_LASTNAME}" "${OPENSLIDES_USER_EMAIL}"
-    create_django_secrets_file
+    update_config_yml "${PROJECT_DIR}/config.yml" \
+      ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
+    recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" \
       "$(date +"%F %H:%M"): Instance created (${DEPLOYMENT_MODE})"
@@ -1806,7 +1667,6 @@ case "$MODE" in
     [[ -n "$DOCKER_IMAGE_TAG_AUTOUPDATE" ]] ||
       DOCKER_IMAGE_TAG_AUTOUPDATE="$(value_from_env "$CLONE_FROM_DIR" DOCKER_OPENSLIDES_AUTOUPDATE_TAG)"
     create_instance_dir
-    create_config_from_template
     clone_secrets
     clone_db
     instance_stop # to force pgnode1 to be restarted
