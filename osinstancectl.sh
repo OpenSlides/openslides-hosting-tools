@@ -54,7 +54,6 @@ OPT_LONGLIST=
 OPT_SECRETS=
 OPT_METADATA=
 OPT_METADATA_SEARCH=
-OPT_IMAGE_INFO=
 OPT_JSON=
 OPT_ADD_ACCOUNT=1
 OPT_LOCALONLY=
@@ -69,7 +68,7 @@ OPT_USE_PARALLEL="${OPT_USE_PARALLEL:-1}"
 FILTER_STATE=
 FILTER_VERSION=
 CLONE_FROM=
-ADMIN_SECRETS_FILE="adminsecret.env"
+ADMIN_SECRETS_FILE="superadmin"
 USER_SECRETS_FILE="usersecret.env"
 OPENSLIDES_USER_FIRSTNAME=
 OPENSLIDES_USER_LASTNAME=
@@ -92,6 +91,7 @@ SYM_ERROR="XX"
 SYM_UNKNOWN="??"
 SYM_STOPPED="__"
 JQ="jq --monochrome-output"
+YQ=yq
 
 enable_color() {
   NCOLORS=$(tput colors) # no. of colors
@@ -137,8 +137,6 @@ Options:
     -l, --long         Include more information in extended listing format
     -s, --secrets      Include sensitive information such as login credentials
     -m, --metadata     Include metadata in instance list
-    -i, --image-info   Show image version info (requires instance to be
-                       started)
     -n, --online       Show only online instances
     -f, --offline      Show only stopped instances
     -e, --error        Show only running but unreachable instances
@@ -502,6 +500,8 @@ instance_has_services_running() {
 }
 
 ping_instance_websocket() {
+  # TODO: needs info for OS4
+  return 1
   # Connect to OpenSlides and parse its version string
   #
   # This is a way to test the availability of the app.  Most grave errors in
@@ -515,8 +515,8 @@ value_from_env() {
   local instance target
   instance="$1"
   target="$2"
-  [[ -f "${instance}/.env" ]] || return 0
-  ( source "${1}/.env" && printf "${!target:-""}" )
+  [[ -f "${instance}/config.yml" ]] || return 0
+  $YQ eval $target "${1}/config.yml"
 }
 
 highlight_match() {
@@ -538,11 +538,11 @@ ls_instance() {
   local user_name=
   local OPENSLIDES_ADMIN_PASSWORD="—"
 
-  [[ -f "${instance}/${CONFIG_FILE}" ]] && [[ -f "${instance}/.env" ]] ||
+  [[ -f "${instance}/${CONFIG_FILE}" ]] && [[ -f "${instance}/config.yml" ]] ||
     fatal "$shortname is not a $DEPLOYMENT_MODE instance."
 
   #  For stacks, get the normalized shortname
-  PROJECT_STACK_NAME="$(value_from_env "$instance" PROJECT_STACK_NAME)"
+  PROJECT_STACK_NAME="$(value_from_env "$instance" '.stackName')"
   [[ -z "${PROJECT_STACK_NAME}" ]] ||
     local normalized_shortname="${PROJECT_STACK_NAME}"
 
@@ -550,7 +550,7 @@ ls_instance() {
   local port
   local sym="$SYM_UNKNOWN"
   local version=
-  port="$(value_from_env "$instance" "EXTERNAL_HTTP_PORT")"
+  port="$(value_from_env "$instance" '.port')"
   [[ -n "$port" ]]
 
   # Check instance deployment state and health
@@ -562,7 +562,7 @@ ls_instance() {
     if [[ -z "$OPT_FAST" ]]; then
       # If we can fetch the version string from the app this is an indicator of
       # a fully functional instance.  If we can not, there is a problem.
-      version=$(ping_instance_websocket "$port")
+      version=$(ping_instance_websocket "$port" ||:)
       [[ -n "$version" ]] || { sym="$SYM_ERROR"; version=; }
     fi
   else
@@ -623,61 +623,21 @@ ls_instance() {
   # ----------------
   # --long
   if [[ -n "$OPT_LONGLIST" ]] || [[ -n "$OPT_JSON" ]]; then
-    # Parse docker-compose.yml
-    local server_image client_image server_tag client_tag
-    local autoupdate_image autoupdate_tag
-    local default_registry
-    local backend_reg frontend_reg autoupdate_reg
-
-    default_registry="$(value_from_env "$instance" DEFAULT_DOCKER_REGISTRY)"
-
-    # Determine image names
-    autoupdate_reg="$(value_from_env "$instance" DOCKER_OPENSLIDES_AUTOUPDATE_REGISTRY)"
-    if [[ -n "$autoupdate_reg" ]]; then
-      autoupdate_image="${autoupdate_reg}/${DOCKER_IMAGE_NAME_AUTOUPDATE}"
-    else
-      autoupdate_image="${default_registry}/${DOCKER_IMAGE_NAME_AUTOUPDATE}"
-    fi
-    backend_reg="$(value_from_env "$instance" DOCKER_OPENSLIDES_BACKEND_REGISTRY)"
-    if [[ -n "$backend_reg" ]]; then
-      server_image="${backend_reg}/${DOCKER_IMAGE_NAME_OPENSLIDES}"
-    else
-      server_image="${default_registry}/${DOCKER_IMAGE_NAME_OPENSLIDES}"
-    fi
-    frontend_reg="$(value_from_env "$instance" DOCKER_OPENSLIDES_FRONTEND_REGISTRY)"
-    if [[ -n "$frontend_reg" ]]; then
-      client_image="${frontend_reg}/${DOCKER_IMAGE_NAME_CLIENT}"
-    else
-      client_image="${default_registry}/${DOCKER_IMAGE_NAME_CLIENT}"
-    fi
-
-    # Determine image tags
-    autoupdate_tag="$(value_from_env "$instance" DOCKER_OPENSLIDES_AUTOUPDATE_TAG)"
-    client_tag="$(value_from_env "$instance" DOCKER_OPENSLIDES_FRONTEND_TAG)"
-    server_tag="$(value_from_env "$instance" DOCKER_OPENSLIDES_BACKEND_TAG)"
-
-    autoupdate_image="${autoupdate_image}:${autoupdate_tag}"
-    client_image="${client_image}:${client_tag}"
-    server_image="${server_image}:${server_tag}"
+    # Parse currently configured versions from docker-compose.yml
+    declare -A service_versions
+    while read -r service version; do
+      service_versions[$service]=$version
+    done < <($YQ eval '.services.*.image | {(path | join(".")): .}' \
+        "${instance}/${CONFIG_FILE}" |
+      awk -F': ' '{ split($1, a, /\./); print a[2], $2}')
   fi
 
   # --secrets
   if [[ -n "$OPT_SECRETS" ]] || [[ -n "$OPT_JSON" ]]; then
     # Parse admin credentials file
     if [[ -r "${instance}/secrets/${ADMIN_SECRETS_FILE}" ]]; then
-      source "${instance}/secrets/${ADMIN_SECRETS_FILE}"
-    fi
-    # Parse user credentials file
-    if [[ -r "${instance}/secrets/${USER_SECRETS_FILE}" ]]; then
-      local OPENSLIDES_USER_FIRSTNAME=
-      local OPENSLIDES_USER_LASTNAME=
-      local OPENSLIDES_USER_PASSWORD=
-      local OPENSLIDES_USER_EMAIL=
-      source "${instance}/secrets/${USER_SECRETS_FILE}"
-      if [[ -n "${OPENSLIDES_USER_FIRSTNAME}" ]] &&
-          [[ -n "${OPENSLIDES_USER_LASTNAME}" ]]; then
-        user_name="${OPENSLIDES_USER_FIRSTNAME} ${OPENSLIDES_USER_LASTNAME}"
-      fi
+      read -r OPENSLIDES_ADMIN_PASSWORD \
+        < "${instance}/secrets/${ADMIN_SECRETS_FILE}"
     fi
   fi
 
@@ -690,21 +650,17 @@ ls_instance() {
     fi
   fi
 
-  # --image-info
-  local server_image_info= client_image_info=
-  if [[ -n "$OPT_IMAGE_INFO" ]] || [[ -n "$OPT_JSON" ]]; then
-    if [[ -n "$version" ]]; then
-      server_image_info="$(curl -s "http://127.0.0.1:${port}/server-version.txt")"
-      [[ "$server_image_info" =~ built\ on ]] || server_image_info=
-      client_image_info="$(curl -s "http://127.0.0.1:${port}/client-version.txt")"
-      [[ "$client_image_info" =~ built\ on ]] || client_image_info=
-    fi
-  fi
-
   # Output
   # ------
   # JSON
   if [[ -n "$OPT_JSON" ]]; then
+    local jq_image_version_args=$(for s in ${!service_versions[@]}; do
+      # v=$(echo "${service_versions[$s]}" | tr - _)
+      v=${service_versions[$s]}
+      s=$(echo "$s" | tr - _)
+      printf -- '--arg %s %s\n' "$s" "$v"
+    done)
+
     # Purposefully not using $JQ here because the output may get piped into
     # another jq process
     jq -n \
@@ -715,46 +671,37 @@ ls_instance() {
       --arg "instance"      "$instance" \
       --arg "version"       "$version" \
       --arg "status"        "$sym" \
-      --arg "server_image"  "$server_image" \
-      --arg "client_image"  "$client_image" \
-      --arg "autoupdate_image" "$autoupdate_image" \
       --arg "port"          "$port" \
-      --arg "admin"         "$OPENSLIDES_ADMIN_PASSWORD" \
-      --arg "user_name"     "$user_name" \
-      --arg "user_password" "$OPENSLIDES_USER_PASSWORD" \
-      --arg "user_email"    "$OPENSLIDES_USER_EMAIL" \
+      --arg "superadmin"    "$OPENSLIDES_ADMIN_PASSWORD" \
       --arg "metadata"      "$(printf "%s\n" "${metadata[@]}")" \
-      --arg "server_image_info" "$server_image_info" \
-      --arg "client_image_info" "$client_image_info" \
-      '{
+      $jq_image_version_args \
+      "{
         instances: [
           {
-            name:      $shortname,
-            stackname: $stackname,
-            directory: $instance,
-            version:   $version,
-            status:    $status,
-            server_image: $server_image,
-            client_image: $client_image,
-            autoupdate_image: $autoupdate_image,
-            port:      $port,
-            admin:     $admin,
-            user: {
-              user_name:    $user_name,
-              user_password: $user_password,
-              user_email: $user_email
-            },
-            metadata: $metadata,
-            server_image_info: $server_image_info,
-            client_image_info: $client_image_info
+            name:       \$shortname,
+            stackname:  \$stackname,
+            directory:  \$instance,
+            version:    \$version,
+            status:     \$status,
+            port:       \$port,
+            superadmin: \$superadmin,
+            metadata:   \$metadata,
+            versions: {
+              # Iterate over all known services; their values get defined by jq
+              # --arg options.
+              $(for s in ${!service_versions[@]}; do
+                printf '"%s": $%s,\n' $s ${s} |
+                tr - _ # dashes not allows in keys
+              done | sort)
+            }
           }
         ]
-      }'
+      }"
     return
   fi
 
   # Basic output
-  if [[ -z "$OPT_LONGLIST" ]] && [[ -z "$OPT_METADATA" ]] && [[ -z "$OPT_IMAGE_INFO" ]]
+  if [[ -z "$OPT_LONGLIST" ]] && [[ -z "$OPT_METADATA" ]]
   then
     printf "%s %-30s\t%-10s\t%s\n" "$sym" "$shortname" "$version" "$first_metadatum"
   else
@@ -768,16 +715,16 @@ ls_instance() {
     if [[ -n "$normalized_shortname" ]]; then
       printf "   ├ %-17s %s\n" "Stack name:" "$normalized_shortname"
     fi
-    printf "   ├ %-17s %s\n" "Version:" "$version"
-    printf "   ├ %-17s %s\n" "Server image:" "$server_image"
-    printf "   ├ %-17s %s\n" "Client image:" "$client_image"
-    printf "   ├ %-17s %s\n" "Autoupdate image:" "$autoupdate_image"
     printf "   ├ %-17s %s\n" "Local port:" "$port"
+    printf "   ├ %-17s\n" "Versions:"
+    for service in "${!service_versions[@]}"; do
+      printf "   │  ├ %-17s %s\n" "${service}:" "${service_versions[$service]}"
+    done | sort
   fi
 
   # --secrets
   if [[ -n "$OPT_SECRETS" ]]; then
-    printf "   ├ %-17s %s : %s\n" "Login:" "admin" "$OPENSLIDES_ADMIN_PASSWORD"
+    printf "   ├ %-17s %s : %s\n" "Login:" "superadmin" "$OPENSLIDES_ADMIN_PASSWORD"
     # Include secondary account credentials if available
     [[ -n "$user_name" ]] &&
       printf "   ├ %-17s \"%s\" : %s\n" \
@@ -793,16 +740,6 @@ ls_instance() {
       m=$(highlight_match "$m") # Colorize match in metadata
       printf "     ┆ %s\n" "$m"
     done
-  fi
-
-  # --image-info
-  if [[ -n "$server_image_info" ]]; then
-    printf "   └ %s\n" "Server image info:"
-    echo "${server_image_info}" | sed 's/^/     ┆ /'
-  fi
-  if [[ -n "$client_image_info" ]]; then
-    printf "   └ %s\n" "Client image info:"
-    echo "${client_image_info}" | sed 's/^/     ┆ /'
   fi
 }
 
@@ -1467,7 +1404,6 @@ longopt=(
   offline
   error
   metadata
-  image-info
   fast
   patient
   search-metadata
@@ -1577,10 +1513,6 @@ while true; do
       ;;
     -M|--search-metadata)
       OPT_METADATA_SEARCH=1
-      shift 1
-      ;;
-    -i|--image-info)
-      OPT_IMAGE_INFO=1
       shift 1
       ;;
     -j|--json)
@@ -1738,6 +1670,7 @@ DEPS=(
   docker
   gawk
   jq
+  yq
   m4
   nc
 )
