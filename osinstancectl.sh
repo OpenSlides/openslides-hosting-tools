@@ -258,7 +258,7 @@ next_free_port() {
   echo "$PORT"
 }
 
-update_env_file() {
+update_config_yml() {
   local file=$1
   local expr=$2
   $YQ eval -i "$expr" "$file"
@@ -395,7 +395,7 @@ ping_instance_websocket() {
   } | gawk 'BEGIN { FPAT = "\"[^\"]*\"" } { gsub(/"/, "", $2); print $2}' || true
 }
 
-value_from_env() {
+value_from_config_yml() {
   local instance target
   instance="$1"
   target="$2"
@@ -426,7 +426,7 @@ ls_instance() {
     fatal "$shortname is not a $DEPLOYMENT_MODE instance."
 
   #  For stacks, get the normalized shortname
-  PROJECT_STACK_NAME="$(value_from_env "$instance" '.stackName')"
+  PROJECT_STACK_NAME="$(value_from_config_yml "$instance" '.stackName')"
   [[ -z "${PROJECT_STACK_NAME}" ]] ||
     local normalized_shortname="${PROJECT_STACK_NAME}"
 
@@ -434,7 +434,7 @@ ls_instance() {
   local port
   local sym="$SYM_UNKNOWN"
   local version=
-  port="$(value_from_env "$instance" '.port')"
+  port="$(value_from_config_yml "$instance" '.port')"
   [[ -n "$port" ]]
 
   # Check instance deployment state and health
