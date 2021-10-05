@@ -26,25 +26,12 @@ HOOKS_DIR=
 ME=$(basename -s .sh "${BASH_SOURCE[0]}")
 CONFIG="/etc/osinstancectl"
 MARKER=".osinstancectl-marker"
-PRIMARY_DATABASE_NODE="pgnode1"
 PROJECT_NAME=
 PROJECT_DIR=
 PROJECT_STACK_NAME=
 PORT=
 DEPLOYMENT_MODE=
 MODE=
-DOCKER_IMAGE_AUTOUPDATE=
-DOCKER_IMAGE_NAME_AUTOUPDATE=openslides-autoupdate
-DOCKER_IMAGE_REGISTRY_AUTOUPDATE=
-DOCKER_IMAGE_TAG_AUTOUPDATE=
-DOCKER_IMAGE_NAME_CLIENT=openslides-client
-DOCKER_IMAGE_REGISTRY_CLIENT=
-DOCKER_IMAGE_REGISTRY_OPENSLIDES=
-DOCKER_IMAGE_TAG_CLIENT=
-DOCKER_IMAGE_CLIENT=
-DOCKER_IMAGE_NAME_OPENSLIDES=openslides-server
-DOCKER_IMAGE_OPENSLIDES=
-DOCKER_IMAGE_TAG_OPENSLIDES=
 ACCOUNTS=
 AUTOSCALE_ACCOUNTS_OVER=
 AUTOSCALE_RESET_ACCOUNTS_OVER=
@@ -215,8 +202,8 @@ arg_check() {
 }
 
 marker_check() {
-  [[ -f "${PROJECT_DIR}/${MARKER}" ]] || {
-    fatal "This instance was not created with $ME."
+  [[ -f "${1}/${MARKER}" ]] || {
+    fatal "The instance was not created with $ME."
     return 1
   }
 }
@@ -283,6 +270,7 @@ create_instance_dir() {
 
   openslides setup $template $config "$PROJECT_DIR" ||
     fatal 'Error during `openslides setup`'
+  touch "${PROJECT_DIR}/${MARKER}"
   touch "${PROJECT_DIR}/config.yml"
   update_config_yml "${PROJECT_DIR}/config.yml" ".port = $PORT"
   update_config_yml "${PROJECT_DIR}/config.yml" \
@@ -709,107 +697,14 @@ list_instances() {
   fi | colorize_ls | column -ts $'\t' | merge_if_json
 }
 
-clone_secrets() {
-  if [[ -d "${CLONE_FROM_DIR}/secrets/" ]]; then
-    rsync -axv "${CLONE_FROM_DIR}/secrets/" "${PROJECT_DIR}/secrets/"
-  fi
-}
-
-containerid_from_service_name() {
-  local id
-  local cid
-  id="$(docker service ps -q --filter desired-state=running "$1")"
-  [[ -n "$id" ]] ||
-    fatal "Service $1 not found.  Make sure it is running."
-  cid="$(docker inspect -f '{{.Status.ContainerStatus.ContainerID}}' "${id}")"
-  echo "$cid"
-}
-
-get_clone_from_id() (
-  PROJECT_STACK_NAME="$(value_from_env "${1}" PROJECT_STACK_NAME)"
-  containerid_from_service_name "${PROJECT_STACK_NAME}_${PRIMARY_DATABASE_NODE}"
-)
-
-clone_db() {
-  local clone_from_id
-  local clone_to_id
-  local available_dbs
-  local port
-  case "$DEPLOYMENT_MODE" in
-    "compose")
-      local clone_from_id
-      local clone_to_id
-      _docker_compose "$PROJECT_DIR" up -d --no-deps pgnode1
-      clone_from_id="$(_docker_compose "$CLONE_FROM_DIR" ps -q "${PRIMARY_DATABASE_NODE}")"
-      clone_to_id="$(_docker_compose "$PROJECT_DIR" ps -q pgnode1)"
-      until _docker_compose "$PROJECT_DIR" exec -T pgnode1 pg_isready -q -p 5432
-      do
-        echo "Waiting for Postgres cluster to become available."
-        sleep 5
-      done
-      ;;
-    "stack")
-      clone_from_id="$(get_clone_from_id "$CLONE_FROM_DIR")"
-      PROJECT_STACK_NAME="$(value_from_env "${PROJECT_DIR}" PROJECT_STACK_NAME)"
-      port="$(value_from_env "${PROJECT_DIR}" EXTERNAL_HTTP_PORT)"
-      # Unlike in Compose mode, the complete instance is booted up.  For this
-      # reason, we will also wait for the complete instance to become ready and
-      # then shut down services that may access the database.
-      instance_start
-      until [[ -n "$(ping_instance_websocket "$port")" ]]; do
-        echo "Waiting for new instance to become available."
-        sleep 5
-      done
-      clone_to_id="$(containerid_from_service_name "${PROJECT_STACK_NAME}_pgnode1")"
-
-      echo "Shutting down other services."
-      docker service rm "${PROJECT_STACK_NAME}_pgbouncer"
-      docker service rm "${PROJECT_STACK_NAME}_server-setup"
-      docker service rm "${PROJECT_STACK_NAME}_server"
-      docker service rm "${PROJECT_STACK_NAME}_media"
-      ;;
-  esac
-  echo "DEBUG: from: $clone_from_id to: $clone_to_id"
-
-  # Clone instance databases individually using pg_dump
-  #
-  # pg_dump's advantage is that it requires no special access (unlike
-  # pg_dumpall) and does not require the cluster to be reinitialized (unlike
-  # pg_basebackup).
-  #
-  # It is assumed that the originating database service is pgnode1.  If you
-  # need to clone from a different node, change the PRIMARY_DATABASE_NODE
-  # variable.  The PgBouncer service is not an option because it does not have
-  # the required superuser access to the cluster.
-  #
-  # The pg_dump/psql method may very well run into issues with large mediafile
-  # databases, however.  pg_dump/pg_restore using the custom format could be
-  # worth a try.
-  available_dbs=("$(docker exec -u postgres "$clone_from_id" \
-    psql -d openslides -c '\l' -AtF '	' | cut -f1)")
-  for db in openslides instancecfg mediafiledata; do
-    echo "${available_dbs[@]}" | grep -wq "$db" || {
-      echo "DB $db not found; skipping..."
-      sleep 10
-      continue
-    }
-    until [[ "$(docker exec -u postgres "$clone_to_id" \
-      psql -qAt -c "select count(*) from pg_stat_activity WHERE datname='${db}';")" -eq 0 ]]
-    do
-      echo "DEBUG: Terminate connections to $db."
-      docker exec -u postgres "$clone_to_id" psql -q -c "SELECT pg_terminate_backend(pid)
-          FROM pg_stat_activity WHERE datname='${db}';"
-      sleep 5
-    done
-    echo "Recreating db for new instance: ${db}..."
-    docker exec -u postgres "$clone_to_id" dropdb --if-exists "$db"
-    docker exec -u postgres "$clone_to_id" createdb -O openslides "$db"
-
-    echo "Cloning ${db}..."
-    docker exec -u postgres "$clone_from_id" \
-      pg_dump -c --if-exists "$db" |
-    docker exec -u postgres -i "$clone_to_id" psql "$db"
-  done
+clone_instance_dir() {
+  marker_check "$CLONE_FROM_DIR"
+  rsync -axv "${CLONE_FROM_DIR}/config.yml" \
+    "${CLONE_FROM_DIR}/${MARKER}" \
+    "${CLONE_FROM_DIR}/secrets" \
+    "${PROJECT_DIR}/"
+  update_config_yml "${PROJECT_DIR}/config.yml" ".port = \"$PORT\""
+  update_config_yml "${PROJECT_DIR}/config.yml" ".stackName = \"$PROJECT_STACK_NAME\""
 }
 
 append_metadata() {
@@ -1604,7 +1499,7 @@ DCCONFIG="${PROJECT_DIR}/${DCCONFIG_FILENAME}"
 case "$MODE" in
   remove)
     arg_check || { usage; exit 2; }
-    [[ -n "$OPT_FORCE" ]] || marker_check ||
+    [[ -n "$OPT_FORCE" ]] || marker_check "$PROJECT_DIR" ||
       fatal "Refusing to delete unless --force is given."
     # Ask for confirmation
     ANS=
@@ -1650,26 +1545,9 @@ case "$MODE" in
     arg_check || { usage; exit 2; }
     echo "Creating new instance: $PROJECT_NAME (based on $CLONE_FROM)"
     PORT=$(next_free_port)
-    DEFAULT_DOCKER_REGISTRY="$(value_from_env "$CLONE_FROM_DIR" DEFAULT_DOCKER_REGISTRY)"
     # Parse image and/or tag from original config if necessary
-    [[ -n "$DOCKER_IMAGE_REGISTRY_OPENSLIDES" ]] ||
-      DOCKER_IMAGE_REGISTRY_OPENSLIDES="$(value_from_env "$CLONE_FROM_DIR" \
-        DOCKER_OPENSLIDES_BACKEND_REGISTRY)"
-    [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] ||
-      DOCKER_IMAGE_TAG_OPENSLIDES="$(value_from_env "$CLONE_FROM_DIR" DOCKER_OPENSLIDES_BACKEND_TAG)"
-    [[ -n "$DOCKER_IMAGE_REGISTRY_CLIENT" ]] ||
-      DOCKER_IMAGE_REGISTRY_CLIENT="$(value_from_env "$CLONE_FROM_DIR" \
-        DOCKER_OPENSLIDES_FRONTEND_REGISTRY)"
-    [[ -n "$DOCKER_IMAGE_TAG_CLIENT" ]] ||
-      DOCKER_IMAGE_TAG_CLIENT="$(value_from_env "$CLONE_FROM_DIR" DOCKER_OPENSLIDES_FRONTEND_TAG)"
-    [[ -n "$DOCKER_IMAGE_REGISTRY_AUTOUPDATE" ]] ||
-      DOCKER_IMAGE_REGISTRY_AUTOUPDATE="$(value_from_env "$CLONE_FROM_DIR" DOCKER_OPENSLIDES_AUTOUPDATE_REGISTRY)"
-    [[ -n "$DOCKER_IMAGE_TAG_AUTOUPDATE" ]] ||
-      DOCKER_IMAGE_TAG_AUTOUPDATE="$(value_from_env "$CLONE_FROM_DIR" DOCKER_OPENSLIDES_AUTOUPDATE_TAG)"
-    create_instance_dir
-    clone_secrets
-    clone_db
-    instance_stop # to force pgnode1 to be restarted
+    clone_instance_dir
+    recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" "Cloned from $CLONE_FROM on $(date)"
     [[ -z "$OPT_LOCALONLY" ]] ||
