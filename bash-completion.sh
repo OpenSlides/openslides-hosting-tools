@@ -1,4 +1,4 @@
-_osinstancectl()
+_os4instancectl()
 {
   local cur prev opts diropts
   COMPREPLY=()
@@ -29,5 +29,5 @@ _osinstancectl()
   fi
 }
 
-complete -F _osinstancectl osinstancectl
-complete -F _osinstancectl osstackctl
+complete -F _os4instancectl os4instancectl
+complete -F _os4instancectl os4stackctl

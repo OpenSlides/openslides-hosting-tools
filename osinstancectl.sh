@@ -1146,10 +1146,10 @@ run_hook() (
 
 # Decide mode from invocation
 case "$(basename "${BASH_SOURCE[0]}")" in
-  "osinstancectl" | "osinstancectl.sh")
+  "os4instancectl" | "osinstancectl.sh")
     DEPLOYMENT_MODE=compose
     ;;
-  "osstackctl" | "osstackctl.sh")
+  "os4stackctl" | "osstackctl.sh")
     DEPLOYMENT_MODE=stack
     ;;
   *)
