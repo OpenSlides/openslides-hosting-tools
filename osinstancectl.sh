@@ -54,6 +54,7 @@ FILTER_STATE=
 FILTER_VERSION=
 CLONE_FROM=
 ADMIN_SECRETS_FILE="superadmin"
+DB_SECRETS_FILE="db"
 DEFAULT_DOCKER_REGISTRY=
 OPT_PRECISE_PROJECT_NAME=
 CURL_OPTS=(--max-time 1 --retry 2 --retry-delay 1 --retry-max-time 3)
@@ -251,6 +252,22 @@ recreate_compose_yml() {
     --config="${PROJECT_DIR}/config.yml" "${PROJECT_DIR}"
 }
 
+gen_pw() {
+  local len="${1:-15}"
+  read -r -n "$len" PW < <(LC_ALL=C tr -dc "[:alnum:]" < /dev/urandom)
+  echo "$PW"
+}
+
+create_db_secrets_file() {
+  local db_secret="${PROJECT_DIR}/secrets/${DB_SECRETS_FILE}"
+  echo "Generating database password..."
+  touch "$db_secret"
+  chmod 600 "$db_secret"
+  # TODO: final file format currently unknown
+  printf 'DB_USER=%s\nDB_PASSWORD=%s\n' "${PROJECT_NAME}_user" "$(gen_pw)" \
+    >> "$db_secret"
+}
+
 create_instance_dir() {
   local template= config=
   [[ -z "$COMPOSE_TEMPLATE" ]] ||
@@ -269,12 +286,6 @@ create_instance_dir() {
   # TODO: still necessary for OS4?
   # update_env_file "$temp_file" "ALLOWED_HOSTS" "\"127.0.0.1 ${PROJECT_NAME} www.${PROJECT_NAME}\""
   # update_env_file "$temp_file" "INSTANCE_URL_SCHEME" "http"
-}
-
-gen_pw() {
-  local len="${1:-15}"
-  read -r -n "$len" PW < <(LC_ALL=C tr -dc "[:alnum:]" < /dev/urandom)
-  echo "$PW"
 }
 
 add_to_haproxy_cfg() {
@@ -689,7 +700,8 @@ list_instances() {
 
 clone_instance_dir() {
   marker_check "$CLONE_FROM_DIR"
-  rsync -axv "${CLONE_FROM_DIR}/config.yml" \
+  rsync -axv --exclude="secrets/${DB_SECRETS_FILE}" \
+    "${CLONE_FROM_DIR}/config.yml" \
     "${CLONE_FROM_DIR}/${MARKER}" \
     "${CLONE_FROM_DIR}/secrets" \
     "${PROJECT_DIR}/"
@@ -1369,6 +1381,7 @@ case "$MODE" in
     create_instance_dir
     update_config_yml "${PROJECT_DIR}/config.yml" \
       ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
+    create_db_secrets_file
     recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" \
@@ -1395,6 +1408,7 @@ case "$MODE" in
     PORT=$(next_free_port)
     # Parse image and/or tag from original config if necessary
     clone_instance_dir
+    create_db_secrets_file
     recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" "Cloned from $CLONE_FROM on $(date)"
