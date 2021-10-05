@@ -7,16 +7,14 @@ _osinstancectl()
   opts="ls add rm start stop update erase autoscale"
   opts+=" --help --long --metadata --online --offline --error"
   opts+=" --clone-from --force --color --project-dir --fast --patient"
-  opts+=" --image-info --version"
-  opts+=" --backend-registry --backend-tag --frontend-registry --frontend-tag --all-tags"
-  opts+=" --autoupdate-registry --autoupdate-tag"
-  opts+=" --local-only --no-add-account"
-  opts+=" --yaml-template --env-template"
+  opts+=" --local-only"
+  opts+=" --version --tag"
+  opts+=" --compose-template --config-template"
   opts+=" --reset --allow-downscale --accounts --dry-run"
   diropts="ls|rm|start|stop|update|erase|autoscale|--clone-from"
 
   if [[ ${prev} =~ ${diropts} ]]; then
-    COMPREPLY=( $(cd /srv/openslides/docker-instances && compgen -d -- ${cur}) )
+    COMPREPLY=( $(cd /srv/openslides/os4-instances && compgen -d -- ${cur}) )
     return 0
   fi
 
