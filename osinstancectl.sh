@@ -278,10 +278,32 @@ create_instance_dir() {
   openslides setup $template $config "$PROJECT_DIR" ||
     fatal 'Error during `openslides setup`'
   touch "${PROJECT_DIR}/${MARKER}"
-  touch "${PROJECT_DIR}/config.yml"
+
+  # Configure instance specifics in config.yml
+  touch -m 700 "${PROJECT_DIR}/config.yml"
   update_config_yml "${PROJECT_DIR}/config.yml" ".port = $PORT"
   update_config_yml "${PROJECT_DIR}/config.yml" \
     ".stackName = \"$PROJECT_STACK_NAME\""
+
+  # TODO: Move create_db_secrets_file back to the create routine at the end
+  # instead of nesting it here.
+  create_db_secrets_file
+  # Temporary: insecurely store credentials in config.yml
+  local db_password
+  db_password=$(grep '^DB_PASSWORD=' "${PROJECT_DIR}/secrets/${DB_SECRETS_FILE}" |
+    cut -d= -f2-)
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.DATASTORE_DATABASE_NAME = \"${PROJECT_NAME}\""
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.DATASTORE_DATABASE_USER = \"${PROJECT_NAME}_user\""
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.DATASTORE_DATABASE_PASSWORD = \"${db_password}\""
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.MEDIA_DATABASE_NAME = \"${PROJECT_NAME}\""
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.MEDIA_DATABASE_USER = \"${PROJECT_NAME}_user\""
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.MEDIA_DATABASE_PASSWORD = \"${db_password}\""
 
   # TODO: still necessary for OS4?
   # update_env_file "$temp_file" "ALLOWED_HOSTS" "\"127.0.0.1 ${PROJECT_NAME} www.${PROJECT_NAME}\""
@@ -1381,7 +1403,6 @@ case "$MODE" in
     create_instance_dir
     update_config_yml "${PROJECT_DIR}/config.yml" \
       ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
-    create_db_secrets_file
     recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" \
