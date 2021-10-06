@@ -310,6 +310,14 @@ create_instance_dir() {
   # update_env_file "$temp_file" "INSTANCE_URL_SCHEME" "http"
 }
 
+load_initial_data() {
+  # TODO: Temporary measure; production setups will not require a seperate port
+  # and connect through the instances main port
+  local port
+  port=$(yq e '.x-default-environment.MANAGE_PORT' "$DCCONFIG")
+  openslides -a 127.0.0.1:${port} initial-data
+}
+
 add_to_haproxy_cfg() {
   [[ -z "$OPT_LOCALONLY" ]] || return 0
   cp -f /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.osbak &&
@@ -758,10 +766,18 @@ instance_start() {
       ;;
     "stack")
       PROJECT_STACK_NAME="$(value_from_config_yml "$PROJECT_DIR" '.stackName')"
-      docker stack deploy -c "${PROJECT_DIR}/docker-stack.yml" \
-        "$PROJECT_STACK_NAME"
+      docker stack deploy -c "$DCCONFIG" "$PROJECT_STACK_NAME"
       ;;
   esac
+  # TODO: As long as the openslides tool can't determine when the instance is
+  # ready for its `initial-data` command, we must make a best effort to wait
+  # long enough.  Hopefully, this method can be replaced with a straight up
+  # call to load_initial_data in the near future.
+  sleep 20
+  until load_initial_data; do
+    sleep 5
+    echo "Waiting for datastore to load initial data"
+  done
 }
 
 instance_stop() {
