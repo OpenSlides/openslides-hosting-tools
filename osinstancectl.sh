@@ -268,6 +268,13 @@ create_db_secrets_file() {
     >> "$db_secret"
 }
 
+create_admin_secrets_file() {
+  echo "Generating superadmin password..."
+  local admin_secret="${PROJECT_DIR}/secrets/${ADMIN_SECRETS_FILE}"
+  rm "$admin_secret"
+  gen_pw | tr -d '\n' > "$admin_secret"
+}
+
 create_instance_dir() {
   local template= config=
   [[ -z "$COMPOSE_TEMPLATE" ]] ||
@@ -1417,6 +1424,7 @@ case "$MODE" in
     echo "Creating new instance: $PROJECT_NAME"
     PORT=$(next_free_port)
     create_instance_dir
+    create_admin_secrets_file
     update_config_yml "${PROJECT_DIR}/config.yml" \
       ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
     recreate_compose_yml
