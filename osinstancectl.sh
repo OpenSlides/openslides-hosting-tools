@@ -292,6 +292,15 @@ create_instance_dir() {
   update_config_yml "${PROJECT_DIR}/config.yml" \
     ".stackName = \"$PROJECT_STACK_NAME\""
 
+  # Force-disable stack-internal Postgres service.  This is a static settings
+  # that could also be handled by a config template but enforcing it here is
+  # probably safer.
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".disablePostgres = true"
+  # Due to a bug in "openslides", the db-data directory is created even if the
+  # stack's Postgres service that would require it is disabled.
+  rmdir "${PROJECT_DIR}/db-data"
+
   # TODO: Move create_db_secrets_file back to the create routine at the end
   # instead of nesting it here.
   create_db_secrets_file
