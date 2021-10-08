@@ -433,6 +433,40 @@ ping_instance_websocket() {
   } | gawk 'BEGIN { FPAT = "\"[^\"]*\"" } { gsub(/"/, "", $2); print $2}' || true
 }
 
+currently_running_version() {
+  # Retrieve the OpenSlides image tags actually in use.
+  case "$DEPLOYMENT_MODE" in
+    "compose")
+      # Check if a network exists
+      _docker_compose "$instance" images |
+      gawk '# Skip expected non-OpenSlides images
+        $2 == "redis" && $3 == "latest" { next }
+        $2 == "postgres" && $3 == "11" { next }
+        NR>2 { print $3 }'
+      ;;
+    "stack")
+      docker stack services --format '{{ .Image }}' "${PROJECT_STACK_NAME}" |
+      gawk -F: '# Skip expected non-OpenSlides images
+        $1 == "redis" && $2 == "latest" { next }
+        { print $NF }'
+      ;;
+  esac |
+  gawk '
+    { a[$0]++ }
+    END {
+      n = asorti(a, sorted, "@val_num_desc")
+      for (i = 1; i <= n; i++) {
+        if (n == 1) {
+          printf("%s", sorted[i])
+        } else {
+          printf("%s(%d)", sorted[i], a[sorted[i]])
+          if (i < length(a)) printf("/")
+        }
+      }
+    }
+  '
+}
+
 value_from_config_yml() {
   local instance target
   instance="$1"
@@ -482,10 +516,12 @@ ls_instance() {
     sym="$SYM_NORMAL"
     version="[skipped]"
     if [[ -z "$OPT_FAST" ]]; then
-      # If we can fetch the version string from the app this is an indicator of
-      # a fully functional instance.  If we can not, there is a problem.
-      version=$(ping_instance_websocket "$port" ||:)
-      [[ -n "$version" ]] || { sym="$SYM_ERROR"; version=; }
+      # TODO: In OS4, the version information here is no longer an indicator
+      # for well-running instance
+      version=$(currently_running_version)
+      sym=$SYM_UNKNOWN
+      # OS3:
+      # [[ -n "$version" ]] || { sym="$SYM_ERROR"; version=; }
     fi
   else
     # If we can not connect to the reverse proxy, the instance may have been
