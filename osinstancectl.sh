@@ -292,6 +292,9 @@ create_instance_dir() {
   update_config_yml "${PROJECT_DIR}/config.yml" \
     ".stackName = \"$PROJECT_STACK_NAME\""
 
+  # Configure desired output filename, e.g. docker-compose.yml or docker-stack.yml
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".filename = \"$DCCONFIG_FILENAME\""
   # Force-disable stack-internal Postgres service.  This is a static settings
   # that could also be handled by a config template but enforcing it here is
   # probably safer.
