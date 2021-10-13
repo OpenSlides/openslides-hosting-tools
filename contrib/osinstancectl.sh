@@ -910,6 +910,31 @@ get_clone_from_id() (
   containerid_from_service_name "${PROJECT_STACK_NAME}_${PRIMARY_DATABASE_NODE}"
 )
 
+clone_db_pre_check() {
+  # Check if database can be cloned
+  #
+  # External DB?
+  CLONE_FROM_STACKNAME="$(value_from_env "$CLONE_FROM_DIR" PROJECT_STACK_NAME)"
+  case "$DEPLOYMENT_MODE" in
+    "compose")
+      _docker_compose "$CLONE_FROM_DIR" images |
+      gawk 'NR>2 { print $1 }'
+      ;;
+    "stack")
+      docker stack services --format '{{ .Name }}' "${CLONE_FROM_STACKNAME}"
+      ;;
+  esac |
+  grep -q "${CLONE_FROM_STACKNAME}_pgnode" || {
+    echo "WARN: Instance ${CLONE_FROM} does not use include database containers."
+    return 2
+  }
+  # Password set?
+  if [[ -n "$(value_from_env "$CLONE_FROM_DIR" DATABASE_PASSWORD)" ]]; then
+    echo "WARN: A database password is set."
+    return 3
+  fi
+}
+
 clone_db() {
   local clone_from_id
   local clone_to_id
@@ -1855,6 +1880,20 @@ case "$MODE" in
     CLONE_FROM_DIR="${INSTANCES}/${CLONE_FROM}"
     arg_check || { usage; exit 2; }
     echo "Creating new instance: $PROJECT_NAME (based on $CLONE_FROM)"
+    # Check early if cloning the database will be possible
+    if clone_db_pre_check; then
+      OPT_CLONE_DB=1
+    else
+      OPT_CLONE_DB=
+      echo "WARN: Internal database cloning functions not available."
+      echo "WARN: The instance's database will not be cloned!"
+      echo "HINT: You can define custom database cloning procedures in a post-clone hook."
+      read -rp "Continue anyway? [Y/n] " start
+      case "$start" in
+        Y|y|Yes|yes|YES|"") : ;;
+        *) exit 0 ;;
+      esac
+    fi
     PORT=$(next_free_port)
     DEFAULT_DOCKER_REGISTRY="$(value_from_env "$CLONE_FROM_DIR" DEFAULT_DOCKER_REGISTRY)"
     # Parse image and/or tag from original config if necessary
@@ -1875,8 +1914,10 @@ case "$MODE" in
     create_instance_dir
     create_config_from_template
     clone_secrets
-    clone_db
-    instance_stop # to force pgnode1 to be restarted
+    if [[ "$OPT_CLONE_DB" ]]; then
+      clone_db
+      instance_stop # to force pgnode1 to be restarted
+    fi
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" "Cloned from $CLONE_FROM on $(date)"
     [[ -z "$OPT_LOCALONLY" ]] ||
