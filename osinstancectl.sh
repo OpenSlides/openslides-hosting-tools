@@ -1499,7 +1499,7 @@ case "$MODE" in
     arg_check || { usage; exit 2; }
     echo "Creating new instance: $PROJECT_NAME (based on $CLONE_FROM)"
     PORT=$(next_free_port)
-    # Parse image and/or tag from original config if necessary
+    run_hook "pre-${MODE}"
     clone_instance_dir
     create_db_secrets_file
     recreate_compose_yml
