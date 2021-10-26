@@ -852,22 +852,11 @@ instance_erase() {
       _docker_compose "$PROJECT_DIR" down --volumes
       ;;
     "stack")
-      local vol=()
       instance_stop || true
-      run_hook mid-erase
-      readarray -t vol < <(
-        docker volume ls --format '{{ .Name }}' |
-        grep "^${PROJECT_STACK_NAME}_"
-      )
-      if [[ "${#vol[@]}" -gt 0 ]]; then
-        echo "Please manually verify and remove the instance's volumes:"
-        for i in "${vol[@]}"; do
-          echo "  docker volume rm $i"
-        done
-        echo "WARN: Please note that $ME does not take volumes" \
-          "on other nodes into account."
-      fi
+      echo "INFO: The database will not be deleted automatically for Swarm deployments." \
+        "You must set up a mid-erase hook to perform the deletion."
       ;;
+    run_hook mid-erase
   esac
 }
 
