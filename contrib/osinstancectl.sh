@@ -925,7 +925,7 @@ clone_db_pre_check() {
       ;;
   esac |
   grep -q "${CLONE_FROM_STACKNAME}_pgnode" || {
-    echo "WARN: Instance ${CLONE_FROM} does not use include database containers."
+    echo "WARN: Instance ${CLONE_FROM} does not include database containers."
     return 2
   }
   # Password set?
