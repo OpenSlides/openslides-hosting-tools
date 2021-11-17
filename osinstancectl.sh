@@ -862,14 +862,8 @@ instance_erase() {
 
 instance_update() {
   log_update() { # Append to metadata
-    if [[ -n "$server_changed" ]]; then
-      append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated all services to" "${DOCKER_IMAGE_TAG_OPENSLIDES}"
-    fi
+    append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated all services to" "${DOCKER_IMAGE_TAG_OPENSLIDES}"
   }
-
-  # TODO
-  fatal "not implemented"
-  # This will require very careful handling, including migrations
 
   # Update values in config.yml
   update_config_yml "${PROJECT_DIR}/config.yml" \
@@ -883,15 +877,7 @@ instance_update() {
     return 0
   }
 
-  case "$DEPLOYMENT_MODE" in
-    "compose")
-      echo "Creating services"
-      _docker_compose "$PROJECT_DIR" up -d
-      ;;
-    "stack")
-      instance_start
-      ;;
-  esac
+  instance_start
 
   log_update
 }
@@ -1530,6 +1516,7 @@ case "$MODE" in
   update)
     [[ -f "$CONFIG" ]] && echo "Applying options from ${CONFIG}." || true
     arg_check || { usage; exit 2; }
+    run_hook "pre-${MODE}"
     instance_update
     run_hook "post-${MODE}"
     ;;
