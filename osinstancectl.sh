@@ -55,7 +55,6 @@ FILTER_VERSION=
 CLONE_FROM=
 ADMIN_SECRETS_FILE="superadmin"
 DB_SECRETS_FILE="db"
-DEFAULT_DOCKER_REGISTRY=
 OPT_PRECISE_PROJECT_NAME=
 CURL_OPTS=(--max-time 1 --retry 2 --retry-delay 1 --retry-max-time 3)
 
@@ -236,6 +235,23 @@ next_free_port() {
   echo "$PORT"
 }
 
+value_from_config_yml() {
+  local instance target
+  instance="$1"
+  target="$2"
+  result=
+  if [[ -f "${instance}/config.yml" ]]; then
+    result=$($YQ eval $target "${instance}/config.yml")
+  fi
+  if [[ "$result" == "null" ]]; then
+    if [[ -f "${CONFIG_YML_TEMPLATE}" ]]; then
+      result=$($YQ eval $target "${CONFIG_YML_TEMPLATE}")
+    fi
+  fi
+  echo "$result"
+  [[ "$result" != "null" ]] || return 1
+}
+
 update_config_yml() {
   local file=$1
   local expr=$2
@@ -295,6 +311,7 @@ create_instance_dir() {
   # Configure instance specifics in config.yml
   touch -m 700 "${PROJECT_DIR}/config.yml"
   update_config_yml "${PROJECT_DIR}/config.yml" ".port = $PORT"
+
   update_config_yml "${PROJECT_DIR}/config.yml" \
     ".stackName = \"$PROJECT_STACK_NAME\""
   if [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]]; then
@@ -460,14 +477,6 @@ currently_running_version() {
       }
     }
   '
-}
-
-value_from_config_yml() {
-  local instance target
-  instance="$1"
-  target="$2"
-  [[ -f "${instance}/config.yml" ]] || return 0
-  $YQ eval $target "${1}/config.yml"
 }
 
 highlight_match() {
