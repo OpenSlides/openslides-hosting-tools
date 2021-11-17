@@ -252,6 +252,12 @@ recreate_compose_yml() {
     --config="${PROJECT_DIR}/config.yml" "${PROJECT_DIR}"
 }
 
+openslides_connect_opts() {
+  local port=$(value_from_config_yml "$PROJECT_DIR" '.port')
+  local secret="$PROJECT_DIR/secrets/manage_auth_password"
+  echo "-a 127.0.0.1:${port} --password-file $secret"
+}
+
 gen_pw() {
   local len="${1:-15}"
   read -r -n "$len" PW < <(LC_ALL=C tr -dc "[:alnum:]" < /dev/urandom)
@@ -291,18 +297,15 @@ create_instance_dir() {
   update_config_yml "${PROJECT_DIR}/config.yml" ".port = $PORT"
   update_config_yml "${PROJECT_DIR}/config.yml" \
     ".stackName = \"$PROJECT_STACK_NAME\""
+  if [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]]; then
+    update_config_yml "${PROJECT_DIR}/config.yml" ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
+  fi
 
-  # Configure desired output filename, e.g. docker-compose.yml or docker-stack.yml
-  update_config_yml "${PROJECT_DIR}/config.yml" \
-    ".filename = \"$DCCONFIG_FILENAME\""
-  # Force-disable stack-internal Postgres service.  This is a static settings
-  # that could also be handled by a config template but enforcing it here is
-  # probably safer.
-  update_config_yml "${PROJECT_DIR}/config.yml" \
-    ".disablePostgres = true"
   # Due to a bug in "openslides", the db-data directory is created even if the
   # stack's Postgres service that would require it is disabled.
-  rmdir "${PROJECT_DIR}/db-data"
+  if [[ $(value_from_config_yml "$PROJECT_DIR" '.disablePostgres') == "true" ]]; then
+    rmdir "${PROJECT_DIR}/db-data"
+  fi
 
   # TODO: Move create_db_secrets_file back to the create routine at the end
   # instead of nesting it here.
@@ -327,14 +330,6 @@ create_instance_dir() {
   # TODO: still necessary for OS4?
   # update_env_file "$temp_file" "ALLOWED_HOSTS" "\"127.0.0.1 ${PROJECT_NAME} www.${PROJECT_NAME}\""
   # update_env_file "$temp_file" "INSTANCE_URL_SCHEME" "http"
-}
-
-load_initial_data() {
-  # TODO: Temporary measure; production setups will not require a seperate port
-  # and connect through the instances main port
-  local port
-  port=$(yq e '.x-default-environment.MANAGE_PORT' "$DCCONFIG")
-  openslides -a 127.0.0.1:${port} initial-data
 }
 
 add_to_haproxy_cfg() {
@@ -827,9 +822,9 @@ instance_start() {
   # TODO: As long as the openslides tool can't determine when the instance is
   # ready for its `initial-data` command, we must make a best effort to wait
   # long enough.  Hopefully, this method can be replaced with a straight up
-  # call to load_initial_data in the near future.
+  # call to initial-data in the near future.
   sleep 20
-  until load_initial_data; do
+  until openslides $(openslides_connect_opts) initial-data; do
     sleep 5
     echo "Waiting for datastore to load initial data"
   done
@@ -1448,8 +1443,6 @@ case "$MODE" in
     PORT=$(next_free_port)
     create_instance_dir
     create_admin_secrets_file
-    update_config_yml "${PROJECT_DIR}/config.yml" \
-      ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
     recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" \
