@@ -24,7 +24,7 @@ CONFIG_YML_TEMPLATE=
 HOOKS_DIR=
 
 ME=$(basename -s .sh "${BASH_SOURCE[0]}")
-CONFIG="/etc/osinstancectl"
+CONFIG="/etc/os4instancectl"
 MARKER=".osinstancectl-marker"
 PROJECT_NAME=
 PROJECT_DIR=
