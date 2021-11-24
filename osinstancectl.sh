@@ -32,7 +32,7 @@ PROJECT_STACK_NAME=
 PORT=
 DEPLOYMENT_MODE=
 MODE=
-DOCKER_IMAGE_TAG_OPENSLIDES=latest
+DOCKER_IMAGE_TAG_OPENSLIDES=
 ACCOUNTS=
 AUTOSCALE_ACCOUNTS_OVER=
 AUTOSCALE_RESET_ACCOUNTS_OVER=
@@ -54,7 +54,7 @@ FILTER_STATE=
 FILTER_VERSION=
 CLONE_FROM=
 ADMIN_SECRETS_FILE="superadmin"
-DB_SECRETS_FILE="db"
+DB_SECRETS_FILE="postgres_password"
 OPT_PRECISE_PROJECT_NAME=
 CURL_OPTS=(--max-time 1 --retry 2 --retry-delay 1 --retry-max-time 3)
 
@@ -283,11 +283,45 @@ gen_pw() {
 create_db_secrets_file() {
   local db_secret="${PROJECT_DIR}/secrets/${DB_SECRETS_FILE}"
   echo "Generating database password..."
-  touch "$db_secret"
+  printf "$(gen_pw)" > "$db_secret"
   chmod 600 "$db_secret"
-  # TODO: final file format currently unknown
-  printf 'DB_USER=%s\nDB_PASSWORD=%s\n' "${PROJECT_NAME}_user" "$(gen_pw)" \
-    >> "$db_secret"
+}
+
+update_config_instance_specifics() {
+  # Configure instance specifics in config.yml
+  touch "${PROJECT_DIR}/config.yml"
+  update_config_yml "${PROJECT_DIR}/config.yml" ".port = $PORT"
+
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".stackName = \"$PROJECT_STACK_NAME\""
+  if [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]]; then
+    update_config_yml "${PROJECT_DIR}/config.yml" ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
+  fi
+}
+
+update_config_services_db_connect_params() {
+  # Write DB-connection credentials to config
+  # for datastore
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.DATASTORE_DATABASE_NAME = \"${PROJECT_NAME}\""
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.DATASTORE_DATABASE_USER = \"${PROJECT_NAME}_user\""
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.DATASTORE_DATABASE_PASSWORD_FILE = \"/run/secrets/postgres_password\""
+  # for media
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.MEDIA_DATABASE_NAME = \"${PROJECT_NAME}\""
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.MEDIA_DATABASE_USER = \"${PROJECT_NAME}_user\""
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.MEDIA_DATABASE_PASSWORD_FILE = \"/run/secrets/postgres_password\""
+  # for vote
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.VOTE_DATABASE_NAME = \"${PROJECT_NAME}\""
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.VOTE_DATABASE_USER = \"${PROJECT_NAME}_user\""
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaultEnvironment.VOTE_DATABASE_PASSWORD_FILE = \"/run/secrets/postgres_password\""
 }
 
 create_admin_secrets_file() {
@@ -308,41 +342,11 @@ create_instance_dir() {
     fatal 'Error during `openslides setup`'
   touch "${PROJECT_DIR}/${MARKER}"
 
-  # Configure instance specifics in config.yml
-  touch -m 700 "${PROJECT_DIR}/config.yml"
-  update_config_yml "${PROJECT_DIR}/config.yml" ".port = $PORT"
-
-  update_config_yml "${PROJECT_DIR}/config.yml" \
-    ".stackName = \"$PROJECT_STACK_NAME\""
-  if [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]]; then
-    update_config_yml "${PROJECT_DIR}/config.yml" ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
-  fi
-
   # Due to a bug in "openslides", the db-data directory is created even if the
   # stack's Postgres service that would require it is disabled.
   if [[ $(value_from_config_yml "$PROJECT_DIR" '.disablePostgres') == "true" ]]; then
     rmdir "${PROJECT_DIR}/db-data"
   fi
-
-  # TODO: Move create_db_secrets_file back to the create routine at the end
-  # instead of nesting it here.
-  create_db_secrets_file
-  # Temporary: insecurely store credentials in config.yml
-  local db_password
-  db_password=$(grep '^DB_PASSWORD=' "${PROJECT_DIR}/secrets/${DB_SECRETS_FILE}" |
-    cut -d= -f2-)
-  update_config_yml "${PROJECT_DIR}/config.yml" \
-    ".defaultEnvironment.DATASTORE_DATABASE_NAME = \"${PROJECT_NAME}\""
-  update_config_yml "${PROJECT_DIR}/config.yml" \
-    ".defaultEnvironment.DATASTORE_DATABASE_USER = \"${PROJECT_NAME}_user\""
-  update_config_yml "${PROJECT_DIR}/config.yml" \
-    ".defaultEnvironment.DATASTORE_DATABASE_PASSWORD = \"${db_password}\""
-  update_config_yml "${PROJECT_DIR}/config.yml" \
-    ".defaultEnvironment.MEDIA_DATABASE_NAME = \"${PROJECT_NAME}\""
-  update_config_yml "${PROJECT_DIR}/config.yml" \
-    ".defaultEnvironment.MEDIA_DATABASE_USER = \"${PROJECT_NAME}_user\""
-  update_config_yml "${PROJECT_DIR}/config.yml" \
-    ".defaultEnvironment.MEDIA_DATABASE_PASSWORD = \"${db_password}\""
 
   # TODO: still necessary for OS4?
   # update_env_file "$temp_file" "ALLOWED_HOSTS" "\"127.0.0.1 ${PROJECT_NAME} www.${PROJECT_NAME}\""
@@ -789,13 +793,13 @@ list_instances() {
 
 clone_instance_dir() {
   marker_check "$CLONE_FROM_DIR"
-  rsync -axv --exclude="secrets/${DB_SECRETS_FILE}" \
+  rsync -axv \
+    --exclude="secrets/${DB_SECRETS_FILE}" \
+    --exclude="secrets/*_postgres_password" \
     "${CLONE_FROM_DIR}/config.yml" \
     "${CLONE_FROM_DIR}/${MARKER}" \
     "${CLONE_FROM_DIR}/secrets" \
     "${PROJECT_DIR}/"
-  update_config_yml "${PROJECT_DIR}/config.yml" ".port = \"$PORT\""
-  update_config_yml "${PROJECT_DIR}/config.yml" ".stackName = \"$PROJECT_STACK_NAME\""
 }
 
 append_metadata() {
@@ -872,6 +876,7 @@ instance_update() {
   # Update values in config.yml
   update_config_yml "${PROJECT_DIR}/config.yml" \
     ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
+  update_config_services_db_connect_params
 
   instance_has_services_running "$PROJECT_STACK_NAME" || {
     echo "WARN: ${PROJECT_NAME} is not running."
@@ -1451,7 +1456,10 @@ case "$MODE" in
     echo "Creating new instance: $PROJECT_NAME"
     PORT=$(next_free_port)
     create_instance_dir
+    update_config_instance_specifics
     create_admin_secrets_file
+    create_db_secrets_file
+    update_config_services_db_connect_params
     recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" \
@@ -1478,7 +1486,9 @@ case "$MODE" in
     PORT=$(next_free_port)
     run_hook "pre-${MODE}"
     clone_instance_dir
+    update_config_instance_specifics
     create_db_secrets_file
+    update_config_services_db_connect_params
     recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" "Cloned from $CLONE_FROM on $(date)"
