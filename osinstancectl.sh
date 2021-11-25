@@ -851,8 +851,8 @@ instance_erase() {
       echo "INFO: The database will not be deleted automatically for Swarm deployments." \
         "You must set up a mid-erase hook to perform the deletion."
       ;;
-    run_hook mid-erase
   esac
+  run_hook mid-erase
 }
 
 instance_update() {
