@@ -873,10 +873,11 @@ instance_update() {
     append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated all services to" "${DOCKER_IMAGE_TAG_OPENSLIDES}"
   }
 
-  # Update values in config.yml
+  # Update config.yml & regenerate stack.yml in case the update requires chagnes
   update_config_yml "${PROJECT_DIR}/config.yml" \
     ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
   update_config_services_db_connect_params
+  recreate_compose_yml
 
   instance_has_services_running "$PROJECT_STACK_NAME" || {
     echo "WARN: ${PROJECT_NAME} is not running."
@@ -1447,6 +1448,7 @@ case "$MODE" in
     echo
     read -rp "Really delete? (uppercase YES to confirm) " ANS
     [[ "$ANS" = "YES" ]] || exit 0
+    run_hook "pre-${MODE}"
     remove "$PROJECT_NAME"
     ;;
   create)
