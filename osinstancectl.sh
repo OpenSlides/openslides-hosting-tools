@@ -236,7 +236,7 @@ next_free_port() {
 }
 
 value_from_config_yml() {
-  local instance target
+  local instance target result
   instance="$1"
   target="$2"
   result=
