@@ -14,13 +14,17 @@
 
 # Defaults
 DEFAULT_URL="https://github.com/OpenSlides/openslides-manage-service/releases/download/latest/openslides"
+DEFAULT_REPO="https://github.com/OpenSlides/OpenSlides"
 DEFAULT_BINDIR="/usr/local/lib/openslides-manage/versions"
 
 set -eu
 ME=$(basename -s .sh "${BASH_SOURCE[0]}")
 TEMPFILE=
+BUILD_DIR=
 URL=
+REPO=
 BINDIR=
+REV=
 HASH=
 OPT_FORCE=
 OPT_LINK=1
@@ -28,6 +32,9 @@ OPT_LINK=1
 cleanup() {
   if [[ -e "$TEMPFILE" ]]; then
     rm -rf "$TEMPFILE"
+  fi
+  if [[ -d "$BUILD_DIR" ]]; then
+    rm -rf "$BUILD_DIR"
   fi
 }
 
@@ -42,18 +49,40 @@ downloaded version is symlinked as 'latest'.
 Hint: Symlink /usr/local/bin/openslides to '<bindir>/latest'.
 
 Options:
-  -u, --url             Download URL (default: $DEFAULT_URL)
-  -b, --bindir          Installation directory (default: $DEFAULT_BINDIR)
-  --force               Force reinstallation
-  --no-link             Do not create symlink 'latest' symlink
+  -u, --url=URL           Download URL (default:
+                          $DEFAULT_URL)
+  -r,
+  --build-revision=REV    Build "openslides" from source to be compatible with
+                          the given central repository version (default
+                          repository: $DEFAULT_REPO)
+  -b, --bindir=DIR        Installation directory (default: $DEFAULT_BINDIR)
+  --force                 Force reinstallation
+  --no-link               Do not create symlink 'latest' symlink
   -h, --help
 EOF
 }
 
+prereq_check() {
+  command -v go > /dev/null || {
+    echo "ERROR: go not found."
+    exit 23
+  }
+}
+
+install_version(){
+  # Install the binary under its own hash
+  echo "Installing as $LATEST."
+  install -m 755 "$TEMPFILE" "$LATEST"
+  [[ "$OPT_LINK" -eq 0 ]] || {
+    echo "Linking as ${BINDIR}/latest."
+    ln -sf "$HASH" "${BINDIR}/latest"
+  }
+}
+
 trap cleanup EXIT
 
-shortopt="hu:b:"
-longopt="help,force,url:,bindir:,no-link"
+shortopt="hu:b:r:"
+longopt="help,force,url:,bindir:,no-link,build-revision:"
 ARGS=$(getopt -o "$shortopt" -l "$longopt" -n "$ME" -- "$@")
 if [ $? -ne 0 ]; then usage; exit 1; fi
 eval set -- "$ARGS"
@@ -66,6 +95,10 @@ while true; do
       ;;
     -b | --bindir)
       BINDIR=$2
+      shift 2
+      ;;
+    -r | --build-revision)
+      REV=$2
       shift 2
       ;;
     --force)
@@ -86,23 +119,52 @@ while true; do
 done
 
 [[ -n "$URL" ]]    || URL=$DEFAULT_URL
+[[ -n "$REPO" ]]   || REPO=$DEFAULT_REPO
 [[ -n "$BINDIR" ]] || BINDIR=$DEFAULT_BINDIR
 
 mkdir -p "$BINDIR"
-TEMPFILE=$(mktemp)
+TEMPFILE=$(mktemp --suffix .bin)
 
-echo "Downloading $URL."
-curl -L --output "$TEMPFILE" "$URL"
+# Build or download
+if [[ "$REV" ]]; then
+  prereq_check
+  echo "Building $REV."
+  BUILD_DIR=$(mktemp -d --suffix .git)
+  git clone -q --no-checkout --depth=100 --shallow-submodules "$REPO" "$BUILD_DIR"
+  if COMMIT=$(git -C "$BUILD_DIR" rev-parse -q --verify "$REV"); then :
+  elif [[ "$REV" =~ .*-([0-9a-f]+$) ]]; then
+    # OpenSlides versions have the format 4.0.0-dev-20211125-845f8c5 which
+    # includes the Git revision, in this case 845f8c5.  If regular revision
+    # parsing failed above, maybe the given commit is such a version.  For
+    # convenience, we try to deduce the revision from this, strictly speaking,
+    # invalid input.
+    REV_SUBSTR=${BASH_REMATCH[1]}
+    echo "WARN: $REV is not a valid Git revision; trying ${REV_SUBSTR} for your convenience."
+    COMMIT=$(git -C "$BUILD_DIR" rev-parse -q --verify "$REV_SUBSTR") || {
+      echo "ERROR: $REV_SUBSTR is not a valid or unique git revision."
+      exit 2
+    }
+    unset REV_SUBSTR
+  else
+    echo "ERROR: $REV is not a valid or unique git revision."
+    exit 2
+  fi
+  git -C "$BUILD_DIR" config advice.detachedHead false # Avoid warning
+  git -C "$BUILD_DIR" checkout -q "$COMMIT"
+  git -C "$BUILD_DIR" submodule -q init openslides-manage-service
+  git -C "$BUILD_DIR" submodule update openslides-manage-service
+  (
+    cd "${BUILD_DIR}/openslides-manage-service"
+    go build -o "$TEMPFILE" ./cmd/openslides
+  )
+else
+  echo "Downloading $URL."
+  curl -L --output "$TEMPFILE" "$URL"
+fi
 
 read -r HASH x < <(sha256sum "$TEMPFILE")
 unset x
 LATEST="${BINDIR}/${HASH}"
-
-if [[ -z "$OPT_FORCE" ]] && [[ -x "$LATEST" ]] && [[ "$(basename "$(realpath "${BINDIR}/latest")")" = "$HASH" ]]
-then
-  echo "Newest version already available."
-  exit 0
-fi
 
 echo "Testing functionality with --help."
 chmod +x "$TEMPFILE"
@@ -113,7 +175,21 @@ else
   exit 23
 fi
 
-echo "Installing as $LATEST."
-install -m 755 "$TEMPFILE" "$LATEST"
-
-[[ "$OPT_LINK" -eq 0 ]] || ln -sf "$HASH" "${BINDIR}/latest"
+if [[ "$REV" ]]; then
+  # If built from source, create git commit-based symlink
+  COMMITS_DIR=$(realpath "${BINDIR}/../commits")
+  mkdir -p "$COMMITS_DIR"
+  COMMITS_PATH="${COMMITS_DIR}/${COMMIT}"
+  if [[ -z "$OPT_FORCE" ]] && [[ -h "$COMMITS_PATH" ]] && [[ -x "$(realpath "$COMMITS_PATH")" ]]; then
+    echo "A version for this commit is already available."
+  else
+    install_version
+    echo "Linking as $COMMITS_PATH."
+    ln -sf "../versions/${HASH}" "$COMMITS_PATH"
+  fi
+elif [[ -z "$OPT_FORCE" ]] &&
+    [[ -x "$LATEST" ]] && [[ "$(basename "$(realpath "${BINDIR}/latest")")" = "$HASH" ]]; then
+  echo "Newest version already available."
+else
+  install_version
+fi
