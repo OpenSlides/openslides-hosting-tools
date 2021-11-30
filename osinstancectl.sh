@@ -199,14 +199,6 @@ marker_check() {
   }
 }
 
-_docker_compose () {
-  # This basically implements the missing docker-compose -C
-  local project_dir="$1"
-  shift
-  docker-compose --project-directory "$project_dir" \
-    --file "${project_dir}/${DCCONFIG_FILENAME}" "$@"
-}
-
 next_free_port() {
   # Select new port
   #
@@ -427,11 +419,6 @@ instance_has_services_running() {
   # running or not.
   local instance="$1"
   case "$DEPLOYMENT_MODE" in
-    "compose")
-      # Check if a network exists
-      docker network ls --format '{{ .Name }}' |
-        grep -q "^${instance}_" || return 1
-      ;;
     "stack")
       docker stack ls --format '{{ .Name }}' | grep -qw "^$instance\$" || return 1
       ;;
@@ -453,14 +440,6 @@ ping_instance_websocket() {
 currently_running_version() {
   # Retrieve the OpenSlides image tags actually in use.
   case "$DEPLOYMENT_MODE" in
-    "compose")
-      # Check if a network exists
-      _docker_compose "$instance" images |
-      gawk '# Skip expected non-OpenSlides images
-        $2 == "redis" && $3 == "latest" { next }
-        $2 == "postgres" && $3 == "11" { next }
-        NR>2 { print $3 }'
-      ;;
     "stack")
       docker stack services --format '{{ .Image }}' "${PROJECT_STACK_NAME}" |
       gawk -F: '# Skip expected non-OpenSlides images
@@ -825,9 +804,6 @@ instance_start() {
   # Re-generate docker-compose.yml/docker-stack.yml
   recreate_compose_yml
   case "$DEPLOYMENT_MODE" in
-    "compose")
-      _docker_compose "$PROJECT_DIR" up -d
-      ;;
     "stack")
       PROJECT_STACK_NAME="$(value_from_config_yml "$PROJECT_DIR" '.stackName')"
       docker stack deploy -c "$DCCONFIG" "$PROJECT_STACK_NAME"
@@ -846,9 +822,6 @@ instance_start() {
 
 instance_stop() {
   case "$DEPLOYMENT_MODE" in
-    "compose")
-      _docker_compose "$PROJECT_DIR" down
-      ;;
     "stack")
       docker stack rm "$PROJECT_STACK_NAME"
     ;;
@@ -857,9 +830,6 @@ esac
 
 instance_erase() {
   case "$DEPLOYMENT_MODE" in
-    "compose")
-      _docker_compose "$PROJECT_DIR" down --volumes
-      ;;
     "stack")
       instance_stop || true
       echo "INFO: The database will not be deleted automatically for Swarm deployments." \
@@ -903,13 +873,6 @@ instance_autoscale() {
 	"Autoscaled $service from ${SCALE_FROM[$service]} to ${SCALE_TO[$service]}"
     done
   }
-
-  case "$DEPLOYMENT_MODE" in
-    "compose")
-      echo "autoscale is currently only implemented for stack deployment"
-      return 0
-    ;;
-  esac
 
   # arrays used to store scaling info per service
   declare -A SCALE_FROM=()
@@ -1120,21 +1083,10 @@ run_hook() (
   fi
   )
 
-
-# Decide mode from invocation
-case "$(basename "${BASH_SOURCE[0]}")" in
-  "os4instancectl" | "osinstancectl.sh")
-    DEPLOYMENT_MODE=compose
-    ;;
-  "os4stackctl" | "osstackctl.sh")
-    DEPLOYMENT_MODE=stack
-    ;;
-  *)
-    echo "WARNING: could not determine desired deployment mode;" \
-      " assuming 'compose'"
-    DEPLOYMENT_MODE=compose
-    ;;
-esac
+# In order to be able to switch deployment modes, it should probably be added
+# as an explicit option.  The program name based setting (osinstancectl vs.
+# osstackctl) has led to problems in the past.
+DEPLOYMENT_MODE=stack
 
 shortopt="halsjmiMnfed:t:"
 longopt=(
@@ -1386,11 +1338,6 @@ DEPS=(
   nc
   openslides
 )
-case "$DEPLOYMENT_MODE" in
-  "compose")
-    DEPS+=(docker-compose)
-    ;;
-esac
 # Check dependencies
 for i in "${DEPS[@]}"; do
     check_for_dependency "$i"
@@ -1426,9 +1373,6 @@ fi
 PROJECT_STACK_NAME="$(echo "$PROJECT_NAME" | tr -d '.')"
 
 case "$DEPLOYMENT_MODE" in
-  "compose")
-    DCCONFIG_FILENAME="docker-compose.yml"
-    ;;
   "stack")
     DCCONFIG_FILENAME="docker-stack.yml"
     ;;

@@ -30,4 +30,3 @@ _os4instancectl()
 }
 
 complete -F _os4instancectl os4instancectl
-complete -F _os4instancectl os4stackctl

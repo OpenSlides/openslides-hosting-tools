@@ -27,16 +27,13 @@ EOF
 
 # Decide mode from invocation
 case "$(basename "${BASH_SOURCE[0]}")" in
-  "rosinstancectl.sh")
-    REMOTE_COMMAND=osinstancectl
-    ;;
-  "rosstackctl.sh")
-    REMOTE_COMMAND=osstackctl
+  "rosinstancectl.sh" | "rosstackctl.sh")
+    REMOTE_COMMAND=os4instancectl
     ;;
   *)
     echo "WARNING: could not determine desired deployment mode;" \
       " assuming 'swarm'"
-    REMOTE_COMMAND=osstackctl
+    REMOTE_COMMAND=os4instancectl
     ;;
 esac
 
