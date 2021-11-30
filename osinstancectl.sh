@@ -161,7 +161,7 @@ fatal() {
 
 check_for_dependency () {
     [[ -n "$1" ]] || return 0
-    which "$1" > /dev/null || { fatal "Dependency not found: $1"; }
+    command -v "$1" > /dev/null || { fatal "Dependency not found: $1"; }
 }
 
 arg_check() {
@@ -217,7 +217,7 @@ next_free_port() {
   local PORT
   HIGHEST_PORT_IN_USE=$(
     find "${INSTANCES}" -type f -name "config.yml" -print0 |
-    xargs -0 yq --no-doc eval '.port' | sort -rn | head -1
+    xargs -0 $YQ --no-doc eval '.port' | sort -rn | head -1
   )
   [[ -n "$HIGHEST_PORT_IN_USE" ]] || HIGHEST_PORT_IN_USE=61000
   PORT=$((HIGHEST_PORT_IN_USE + 1))
@@ -226,7 +226,7 @@ next_free_port() {
   #  try to find the next free port (this situation can occur if there are test
   #  instances outside of the regular instances directory)
   n=0
-  while ! ss -tnHl | awk -v port="$PORT" '$4 ~ port { exit 2 }'; do
+  while ! ss -tnHl | gawk -v port="$PORT" '$4 ~ port { exit 2 }'; do
     [[ $n -le 25 ]] || { fatal "Could not find free port"; }
     ((PORT+=1))
     [[ $PORT -le 65535 ]] || { fatal "Ran out of ports"; }
@@ -595,7 +595,7 @@ ls_instance() {
       service_versions[$service]=$version
     done < <($YQ eval '.services.*.image | {(path | join(".")): .}' \
         "${instance}/${DCCONFIG_FILENAME}" |
-      awk -F': ' '{ split($1, a, /\./); print a[2], $2}')
+      gawk -F': ' '{ split($1, a, /\./); print a[2], $2}')
   fi
 
   # --secrets
