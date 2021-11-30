@@ -87,12 +87,12 @@ enable_color() {
 
 usage() {
 cat <<EOF
-Usage: $ME [options] <action> <instance>
+Usage: $ME [options] <action> <instance|pattern>
 
 Manage OpenSlides Docker instances.
 
 Actions:
-  ls                   List instances and their status.  <instance> is
+  ls                   List instances and their status.  <pattern> is
                        a grep ERE search pattern in this case.
   add                  Add a new instance for the given domain (requires FQDN)
   rm                   Remove <instance> (requires FQDN)
@@ -105,9 +105,10 @@ Actions:
                        ACCOUNTS metadatum (adjust values in CONFIG file)
 
 Options:
-  -d, --project-dir    Directly specify the project directory
-  --compose-template   Specify a YAML template
-  --config-template    Specify a .env template
+  -d,
+  --project-dir=DIR    Directly specify the project directory
+  --compose-template=FILE  Specify a YAML template
+  --config-template=FILE   Specify a .env template
   --force              Disable various safety checks
   --color=WHEN         Enable/disable color output.  WHEN is never, always, or
                        auto.
@@ -129,7 +130,7 @@ Options:
     -j, --json         Enable JSON output format
 
   for add & update:
-    -t, --tag          Specify the image tags for all OpenSlides components
+    -t, --tag=TAG      Specify the image tags for all OpenSlides components
     --local-only       Create an instance without setting up HAProxy and Let's
                        Encrypt certificates.  Such an instance is only
                        accessible on localhost, e.g., http://127.0.0.1:61000.
@@ -142,7 +143,7 @@ Options:
     --allow-downscale  Without this option services will only be scaled upward to
                        to prevent possibly undoing manual scaling adjusmtents
     --reset            Reset all scaling back to normal
-    --accounts         Specify the number of acoounts to scale for overriding
+    --accounts=NUM     Specify the number of acoounts to scale for overriding
                        read from metadata.txt
     --dry-run          Print out actions instead of actually performing them
 
