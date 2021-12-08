@@ -407,9 +407,17 @@ ping_instance_simple() {
   # This is used as an indicator as to whether the instance is supposed to be
   # running or not.  The reason for this check is that it is fast and that the
   # reverse proxy container rarely fails itself, so it is always running when
-  # an instance has been started.  Errors usually happen in the server
-  # container which is checked with ping_instance_websocket.
+  # an instance has been started.  Errors usually happen in the backend
+  # container which is checked with instance_health_status.
   nc -z 127.0.0.1 "$1" || return 1
+}
+
+instance_health_status() {
+  # Check instance's health through its provided HTTP resources
+  #
+  # backend
+  LC_ALL=C curl -s "${CURL_OPTS[@]}" "http://127.0.0.1:${1}/system/action/health" |
+    jq -r '.status' 2>/dev/null | grep -q 'running'
 }
 
 instance_has_services_running() {
@@ -423,18 +431,6 @@ instance_has_services_running() {
       docker stack ls --format '{{ .Name }}' | grep -qw "^$instance\$" || return 1
       ;;
   esac
-}
-
-ping_instance_websocket() {
-  # TODO: needs info for OS4
-  return 1
-  # Connect to OpenSlides and parse its version string
-  #
-  # This is a way to test the availability of the app.  Most grave errors in
-  # OpenSlides lead to this function failing.
-  {
-    LC_ALL=C curl -s "${CURL_OPTS[@]}" "http://127.0.0.1:${1}/apps/core/version/"
-  } | gawk 'BEGIN { FPAT = "\"[^\"]*\"" } { gsub(/"/, "", $2); print $2}' || true
 }
 
 currently_running_version() {
@@ -504,12 +500,8 @@ ls_instance() {
     sym="$SYM_NORMAL"
     version="[skipped]"
     if [[ -z "$OPT_FAST" ]]; then
-      # TODO: In OS4, the version information here is no longer an indicator
-      # for well-running instance
+      instance_health_status "$port" || sym=$SYM_ERROR
       version=$(currently_running_version)
-      sym=$SYM_UNKNOWN
-      # OS3:
-      # [[ -n "$version" ]] || { sym="$SYM_ERROR"; version=; }
     fi
   else
     # If we can not connect to the reverse proxy, the instance may have been
