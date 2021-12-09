@@ -134,8 +134,14 @@ Options:
 
   for add & update:
     -t, --tag=TAG      Specify the image tags for all OpenSlides components
-    -O, --management-tool=[PATH|NAME]
-                       Specify the 'openslides' executable to use
+    -O, --management-tool=[PATH|NAME|-]
+                       Specify the 'openslides' executable to use.  The program
+                       must be available in the management tool's versions
+                       directory [${MANAGEMENT_TOOL_BINDIR}/].
+                       If only a file NAME is given, it is assumed to be
+                       relative to that directory.
+                       The special string "-" indicates that the latest version
+                       is to be followed.
     --local-only       Create an instance without setting up HAProxy and Let's
                        Encrypt certificates.  Such an instance is only
                        accessible on localhost, e.g., http://127.0.0.1:61000.
@@ -216,21 +222,30 @@ select_management_tool() {
   # Read the required management tool version from the instance's config file
   # or use the version provided on the command line.
   if [[ -n "$OPT_MANAGEMENT_TOOL" ]]; then
-    if [[ "$OPT_MANAGEMENT_TOOL" =~ \/ ]]; then
+    # The given argument is the special string "-", indicating that the latest
+    # version should be followed
+    if [[ "$OPT_MANAGEMENT_TOOL" = '-' ]]; then
+      MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/latest"
+    elif [[ "$OPT_MANAGEMENT_TOOL" =~ \/ ]]; then
       # The given argument is a path
       MANAGEMENT_TOOL=$(realpath "$OPT_MANAGEMENT_TOOL")
-      MANAGEMENT_TOOL_HASH=$(hash_management_tool)
     else
       # The given argument is only a filename; prepend path here
       MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${OPT_MANAGEMENT_TOOL}"
-      MANAGEMENT_TOOL_HASH=$(hash_management_tool)
     fi
+  # Reading tool version from instance configuration
   elif MANAGEMENT_TOOL_HASH=$(value_from_config_yml "$PROJECT_DIR" '.managementToolHash'); then
-    MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${MANAGEMENT_TOOL_HASH}"
+    # Version is set to simply follow latest
+    if [[ "$MANAGEMENT_TOOL_HASH" = '-' ]]; then
+      MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/latest"
+    # Version is configured to a specific hash
+    else
+      MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${MANAGEMENT_TOOL_HASH}"
+    fi
   else # Fall back to default
     MANAGEMENT_TOOL="${MANAGEMENT_TOOL}"
-    MANAGEMENT_TOOL_HASH=$(hash_management_tool)
   fi
+  MANAGEMENT_TOOL_HASH=$(hash_management_tool)
   if [[ -x "$MANAGEMENT_TOOL" ]]; then
     echo "INFO: Using 'openslides' tool at $MANAGEMENT_TOOL"
   else
@@ -368,8 +383,13 @@ create_instance_dir() {
     fatal "Error during \`"${MANAGEMENT_TOOL}" setup\`"
   touch "${PROJECT_DIR}/${MARKER}"
 
-  # Note which version of the openslides tool is compatible with the instance
-  update_config_yml "${PROJECT_DIR}/config.yml" ".managementToolHash = \"$MANAGEMENT_TOOL_HASH\""
+  # Note which version of the openslides tool is compatible with the instance,
+  # unless special string "-" is given
+  if [[ "$OPT_MANAGEMENT_TOOL" = '-' ]]; then
+    update_config_yml "${PROJECT_DIR}/config.yml" ".managementToolHash = \"$OPT_MANAGEMENT_TOOL\""
+  else
+    update_config_yml "${PROJECT_DIR}/config.yml" ".managementToolHash = \"$MANAGEMENT_TOOL_HASH\""
+  fi
 
   # Due to a bug in "openslides", the db-data directory is created even if the
   # stack's Postgres service that would require it is disabled.
@@ -879,10 +899,16 @@ instance_update() {
 
   # Update management tool hash if requested
   [[ -z "$OPT_MANAGEMENT_TOOL" ]] || {
+    local cfg_hash=$MANAGEMENT_TOOL_HASH
+    if [[ "$OPT_MANAGEMENT_TOOL" = '-' ]]; then
+      cfg_hash='-'
+    fi
     update_config_yml "${PROJECT_DIR}/config.yml" \
-      ".managementToolHash = \"$MANAGEMENT_TOOL_HASH\""
-    append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated management tool to" "${MANAGEMENT_TOOL_HASH}"
+      ".managementToolHash = \"$cfg_hash\""
+    append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"):" \
+      "Updated management tool to" "${cfg_hash} ($MANAGEMENT_TOOL_HASH)"
   }
+
 
   instance_has_services_running "$PROJECT_STACK_NAME" || {
     echo "WARN: ${PROJECT_NAME} is not running."
