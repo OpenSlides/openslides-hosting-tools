@@ -1462,7 +1462,9 @@ case "$MODE" in
     arg_check || { usage; exit 2; }
     # Use defaults in the absence of options
     echo "Creating new instance: $PROJECT_NAME"
-    [[ -n "$OPT_MANAGEMENT_TOOL" ]] || OPT_MANAGEMENT_TOOL=$MANAGEMENT_TOOL
+    # If not specified, set management tool to "-", i.e., track the latest
+    # version
+    [[ -n "$OPT_MANAGEMENT_TOOL" ]] || OPT_MANAGEMENT_TOOL="-"
     select_management_tool
     PORT=$(next_free_port)
     create_instance_dir
