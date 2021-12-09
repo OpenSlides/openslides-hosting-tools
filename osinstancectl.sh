@@ -134,7 +134,7 @@ Options:
 
   for add & update:
     -t, --tag=TAG      Specify the image tags for all OpenSlides components
-    -O, --management-tool=PATH
+    -O, --management-tool=[PATH|NAME]
                        Specify the 'openslides' executable to use
     --local-only       Create an instance without setting up HAProxy and Let's
                        Encrypt certificates.  Such an instance is only
@@ -216,8 +216,15 @@ select_management_tool() {
   # Read the required management tool version from the instance's config file
   # or use the version provided on the command line.
   if [[ -n "$OPT_MANAGEMENT_TOOL" ]]; then
-    MANAGEMENT_TOOL=$(realpath "$OPT_MANAGEMENT_TOOL")
-    MANAGEMENT_TOOL_HASH=$(hash_management_tool)
+    if [[ "$OPT_MANAGEMENT_TOOL" =~ \/ ]]; then
+      # The given argument is a path
+      MANAGEMENT_TOOL=$(realpath "$OPT_MANAGEMENT_TOOL")
+      MANAGEMENT_TOOL_HASH=$(hash_management_tool)
+    else
+      # The given argument is only a filename; prepend path here
+      MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${OPT_MANAGEMENT_TOOL}"
+      MANAGEMENT_TOOL_HASH=$(hash_management_tool)
+    fi
   elif MANAGEMENT_TOOL_HASH=$(value_from_config_yml "$PROJECT_DIR" '.managementToolHash'); then
     MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${MANAGEMENT_TOOL_HASH}"
   else # Fall back to default
