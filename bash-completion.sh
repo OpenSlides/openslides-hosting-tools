@@ -8,7 +8,7 @@ _os4instancectl()
   opts+=" --help --long --metadata --online --offline --error"
   opts+=" --clone-from --force --color --project-dir --fast --patient"
   opts+=" --local-only"
-  opts+=" --version --tag"
+  opts+=" --version --tag --management-tool"
   opts+=" --compose-template --config-template"
   opts+=" --reset --allow-downscale --accounts --dry-run"
   diropts="ls|rm|start|stop|update|erase|autoscale|--clone-from"
@@ -19,6 +19,11 @@ _os4instancectl()
   fi
 
   if [[ ${prev} == --*template ]]; then
+    _filedir
+    return 0
+  fi
+
+  if [[ ${prev} =~ --management-tool|-O ]]; then
     _filedir
     return 0
   fi

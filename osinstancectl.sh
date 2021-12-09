@@ -22,6 +22,8 @@ INSTANCES="/srv/openslides/os4-instances"
 COMPOSE_TEMPLATE=
 CONFIG_YML_TEMPLATE=
 HOOKS_DIR=
+MANAGEMENT_TOOL_BINDIR="/usr/local/lib/openslides-manage/versions"
+MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/latest"
 
 ME=$(basename -s .sh "${BASH_SOURCE[0]}")
 CONFIG="/etc/os4instancectl"
@@ -50,6 +52,7 @@ OPT_WWW=
 OPT_FAST=
 OPT_PATIENT=
 OPT_USE_PARALLEL="${OPT_USE_PARALLEL:-1}"
+OPT_MANAGEMENT_TOOL=
 FILTER_STATE=
 FILTER_VERSION=
 CLONE_FROM=
@@ -131,6 +134,8 @@ Options:
 
   for add & update:
     -t, --tag=TAG      Specify the image tags for all OpenSlides components
+    -O, --management-tool=PATH
+                       Specify the 'openslides' executable to use
     --local-only       Create an instance without setting up HAProxy and Let's
                        Encrypt certificates.  Such an instance is only
                        accessible on localhost, e.g., http://127.0.0.1:61000.
@@ -199,6 +204,33 @@ marker_check() {
   }
 }
 
+hash_management_tool() {
+  # Return the SHA256 hash of the selected "openslides" tool.  For lack of
+  # proper versioning, the has is used to track compatibility with individual
+  # instances by adding it to each config.yml.
+  sha256sum "$MANAGEMENT_TOOL" 2>/dev/null | awk '{ print $1 }' ||
+    fatal "$MANAGEMENT_TOOL not found."
+}
+
+select_management_tool() {
+  # Read the required management tool version from the instance's config file
+  # or use the version provided on the command line.
+  if [[ -n "$OPT_MANAGEMENT_TOOL" ]]; then
+    MANAGEMENT_TOOL=$(realpath "$OPT_MANAGEMENT_TOOL")
+    MANAGEMENT_TOOL_HASH=$(hash_management_tool)
+  elif MANAGEMENT_TOOL_HASH=$(value_from_config_yml "$PROJECT_DIR" '.managementToolHash'); then
+    MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${MANAGEMENT_TOOL_HASH}"
+  else # Fall back to default
+    MANAGEMENT_TOOL="${MANAGEMENT_TOOL}"
+    MANAGEMENT_TOOL_HASH=$(hash_management_tool)
+  fi
+  if [[ -x "$MANAGEMENT_TOOL" ]]; then
+    echo "INFO: Using 'openslides' tool at $MANAGEMENT_TOOL"
+  else
+    fatal "$MANAGEMENT_TOOL not found."
+  fi
+}
+
 next_free_port() {
   # Select new port
   #
@@ -248,6 +280,7 @@ value_from_config_yml() {
 update_config_yml() {
   local file=$1
   local expr=$2
+  [[ -f "$file" ]] || touch "$file"
   $YQ eval -i "$expr" "$file"
 }
 
@@ -257,7 +290,7 @@ recreate_compose_yml() {
     template="--template=${COMPOSE_TEMPLATE}"
   [[ -z "$CONFIG_YML_TEMPLATE" ]] ||
     config="--config=${CONFIG_YML_TEMPLATE}"
-  openslides config $template $config \
+  "${MANAGEMENT_TOOL}" config $template $config \
     --config="${PROJECT_DIR}/config.yml" "${PROJECT_DIR}"
 }
 
@@ -324,9 +357,12 @@ create_instance_dir() {
   [[ -z "$CONFIG_YML_TEMPLATE" ]] ||
     config="--config=${CONFIG_YML_TEMPLATE}"
 
-  openslides setup $template $config "$PROJECT_DIR" ||
-    fatal 'Error during `openslides setup`'
+  "${MANAGEMENT_TOOL}" setup $template $config "$PROJECT_DIR" ||
+    fatal "Error during \`"${MANAGEMENT_TOOL}" setup\`"
   touch "${PROJECT_DIR}/${MARKER}"
+
+  # Note which version of the openslides tool is compatible with the instance
+  update_config_yml "${PROJECT_DIR}/config.yml" ".managementToolHash = \"$MANAGEMENT_TOOL_HASH\""
 
   # Due to a bug in "openslides", the db-data directory is created even if the
   # stack's Postgres service that would require it is disabled.
@@ -825,27 +861,30 @@ instance_erase() {
 }
 
 instance_update() {
-  log_update() { # Append to metadata
+  # Update values in config.yml
+  [[ -z "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] || {
+    update_config_yml "${PROJECT_DIR}/config.yml" \
+      ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
+    update_config_services_db_connect_params
+    recreate_compose_yml
     append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated all services to" "${DOCKER_IMAGE_TAG_OPENSLIDES}"
   }
 
-  # Update config.yml & regenerate stack.yml in case the update requires chagnes
-  update_config_yml "${PROJECT_DIR}/config.yml" \
-    ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
-  update_config_services_db_connect_params
-  recreate_compose_yml
+  # Update management tool hash if requested
+  [[ -z "$OPT_MANAGEMENT_TOOL" ]] || {
+    update_config_yml "${PROJECT_DIR}/config.yml" \
+      ".managementToolHash = \"$MANAGEMENT_TOOL_HASH\""
+    append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated management tool to" "${MANAGEMENT_TOOL_HASH}"
+  }
 
   instance_has_services_running "$PROJECT_STACK_NAME" || {
     echo "WARN: ${PROJECT_NAME} is not running."
     echo "      The configuration has been updated and the instance will" \
          "be upgraded upon its next start."
-    log_update
     return 0
   }
 
   instance_start
-
-  log_update
 }
 
 instance_autoscale() {
@@ -1073,7 +1112,7 @@ run_hook() (
 # osstackctl) has led to problems in the past.
 DEPLOYMENT_MODE=stack
 
-shortopt="halsjmiMnfed:t:"
+shortopt="halsjmiMnfed:t:O:"
 longopt=(
   help
   color:
@@ -1105,6 +1144,7 @@ longopt=(
 
   # adding & upgrading instances
   tag:
+  management-tool:
 
   # autoscaling
   allow-downscale
@@ -1144,6 +1184,10 @@ while true; do
       ;;
     -t|--tag)
       DOCKER_IMAGE_TAG_OPENSLIDES="$2"
+      shift 2
+      ;;
+    -O | --management-tool)
+      OPT_MANAGEMENT_TOOL=$2
       shift 2
       ;;
     -a|--all)
@@ -1280,8 +1324,8 @@ for arg; do
     update)
       [[ -z "$MODE" ]] || { usage; exit 2; }
       MODE=update
-      [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] ||
-        fatal "Need at least one image name or tag for update"
+      [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] || [[ -n "$OPT_MANAGEMENT_TOOL" ]] ||
+        fatal "Update requires tag or management tool option"
       shift 1
       ;;
     autoscale)
@@ -1321,7 +1365,6 @@ DEPS=(
   yq
   m4
   nc
-  openslides
 )
 # Check dependencies
 for i in "${DEPS[@]}"; do
@@ -1386,6 +1429,8 @@ case "$MODE" in
     arg_check || { usage; exit 2; }
     # Use defaults in the absence of options
     echo "Creating new instance: $PROJECT_NAME"
+    [[ -n "$OPT_MANAGEMENT_TOOL" ]] || OPT_MANAGEMENT_TOOL=$MANAGEMENT_TOOL
+    select_management_tool
     PORT=$(next_free_port)
     create_instance_dir
     update_config_instance_specifics
@@ -1395,6 +1440,8 @@ case "$MODE" in
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" \
       "$(date +"%F %H:%M"): Instance created (${DEPLOYMENT_MODE})"
+    append_metadata "$PROJECT_DIR" \
+      "$(date +"%F %H:%M"): image=$DOCKER_IMAGE_TAG_OPENSLIDES manage=$MANAGEMENT_TOOL_HASH"
     [[ -z "$OPT_LOCALONLY" ]] ||
       append_metadata "$PROJECT_DIR" "No HAProxy config added (--local-only)"
     add_to_haproxy_cfg
@@ -1422,6 +1469,8 @@ case "$MODE" in
     recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" "Cloned from $CLONE_FROM on $(date)"
+    append_metadata "$PROJECT_DIR" \
+      "$(date +"%F %H:%M"): image=$DOCKER_IMAGE_TAG_OPENSLIDES manage=$MANAGEMENT_TOOL_HASH"
     [[ -z "$OPT_LOCALONLY" ]] ||
       append_metadata "$PROJECT_DIR" "No HAProxy config added (--local-only)"
     add_to_haproxy_cfg
@@ -1434,6 +1483,7 @@ case "$MODE" in
     ;;
   start)
     arg_check || { usage; exit 2; }
+    select_management_tool
     instance_start
     run_hook "post-${MODE}"
     ;;
@@ -1458,6 +1508,7 @@ case "$MODE" in
   update)
     [[ -f "$CONFIG" ]] && echo "Applying options from ${CONFIG}." || true
     arg_check || { usage; exit 2; }
+    select_management_tool
     run_hook "pre-${MODE}"
     instance_update
     run_hook "post-${MODE}"
