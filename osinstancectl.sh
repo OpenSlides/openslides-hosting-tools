@@ -232,7 +232,7 @@ value_from_config_yml() {
   local instance target result
   instance="$1"
   target="$2"
-  result=
+  result=null
   if [[ -f "${instance}/config.yml" ]]; then
     result=$($YQ eval $target "${instance}/config.yml")
   fi
@@ -241,8 +241,8 @@ value_from_config_yml() {
       result=$($YQ eval $target "${CONFIG_YML_TEMPLATE}")
     fi
   fi
-  echo "$result"
   [[ "$result" != "null" ]] || return 1
+  echo "$result"
 }
 
 update_config_yml() {
