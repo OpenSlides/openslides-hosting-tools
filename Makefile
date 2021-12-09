@@ -16,5 +16,6 @@ install:
 	$(INSTALL) -pm 644 bash-completion.sh /etc/bash_completion.d/os4instancectl
 	# $(INSTALL) -pm 0755 openslides-bulk-update.sh \
 	#   $(dest_bindir)/openslides-bulk-update
+	$(INSTALL) -pm 0755 openslides-bin-installer.sh $(dest_bindir)/openslides-bin-installer
 	@echo "Removing outdated installation paths."
 	rm -rf $(dest_bindir)/os4stackctl
