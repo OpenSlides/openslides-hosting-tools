@@ -273,13 +273,6 @@ gen_pw() {
   echo "$PW"
 }
 
-create_db_secrets_file() {
-  local db_secret="${PROJECT_DIR}/secrets/${DB_SECRETS_FILE}"
-  echo "Generating database password..."
-  printf "$(gen_pw)" > "$db_secret"
-  chmod 600 "$db_secret"
-}
-
 update_config_instance_specifics() {
   # Configure instance specifics in config.yml
   touch "${PROJECT_DIR}/config.yml"
@@ -1397,7 +1390,6 @@ case "$MODE" in
     create_instance_dir
     update_config_instance_specifics
     create_admin_secrets_file
-    create_db_secrets_file
     update_config_services_db_connect_params
     recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
@@ -1426,7 +1418,6 @@ case "$MODE" in
     run_hook "pre-${MODE}"
     clone_instance_dir
     update_config_instance_specifics
-    create_db_secrets_file
     update_config_services_db_connect_params
     recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
