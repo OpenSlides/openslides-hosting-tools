@@ -624,6 +624,10 @@ ls_instance() {
     done < <($YQ eval '.services.*.image | {(path | join(".")): .}' \
         "${instance}/${DCCONFIG_FILENAME}" |
       gawk -F': ' '{ split($1, a, /\./); print a[2], $2}')
+    # Add management tool version to list of services.  This is not actually
+    # a service running inside the stack but a version relevant to the stack
+    # nonetheless.
+    service_versions[management-tool]=$(value_from_config_yml "$instance" '.managementToolHash') || true
   fi
 
   # --secrets
