@@ -43,6 +43,7 @@ OPT_SECRETS=
 OPT_METADATA=
 OPT_METADATA_SEARCH=
 OPT_JSON=
+OPT_ADD_ACCOUNT=1
 OPT_LOCALONLY=
 OPT_FORCE=
 OPT_ALLOW_DOWNSCALE=
@@ -57,7 +58,12 @@ FILTER_STATE=
 FILTER_VERSION=
 CLONE_FROM=
 ADMIN_SECRETS_FILE="superadmin"
+USER_SECRETS_FILE="user.yml"
 DB_SECRETS_FILE="postgres_password"
+OPENSLIDES_USER_FIRSTNAME=
+OPENSLIDES_USER_LASTNAME=
+OPENSLIDES_USER_EMAIL=
+OPENSLIDES_USER_PASSWORD=
 OPT_PRECISE_PROJECT_NAME=
 CURL_OPTS=(--max-time 1 --retry 2 --retry-delay 1 --retry-max-time 3)
 
@@ -145,6 +151,7 @@ Options:
     --local-only       Create an instance without setting up HAProxy and Let's
                        Encrypt certificates.  Such an instance is only
                        accessible on localhost, e.g., http://127.0.0.1:61000.
+    --no-add-account   Do not add an additional, customized local admin account
     --clone-from       Create the new instance based on the specified existing
                        instance
     --www              Add a www subdomain in addition to the specified
@@ -372,6 +379,44 @@ create_admin_secrets_file() {
   touch "$admin_secret"
   chmod 600 "$admin_secret"
   gen_pw | tr -d '\n' >> "$admin_secret"
+}
+
+query_user_account_name() {
+  if [[ -n "$OPT_ADD_ACCOUNT" ]]; then
+    echo "Create local admin account for:"
+    while [[ -z "$OPENSLIDES_USER_FIRSTNAME" ]] || \
+          [[ -z "$OPENSLIDES_USER_LASTNAME" ]]
+    do
+      read -rp "First & last name: " \
+        OPENSLIDES_USER_FIRSTNAME OPENSLIDES_USER_LASTNAME
+      read -rp "Email (optional): " OPENSLIDES_USER_EMAIL
+    done
+  fi
+}
+
+create_user_secrets_file() {
+  if [[ -n "$OPT_ADD_ACCOUNT" ]]; then
+    local first_name
+    local last_name
+    local email # optional
+    local PW
+    echo "Generating user credentials..."
+    first_name=$1
+    last_name=$2
+    email=$3
+    PW=$(gen_pw)
+    touch "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
+    chmod 600 "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
+    cat << EOF >> "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
+---
+first_name: "$first_name"
+last_name: "$last_name"
+username: "$first_name $last_name"
+email: "$email"
+default_password: "$PW"
+organization_management_level: can_manage_organization
+EOF
+  fi
 }
 
 create_instance_dir() {
@@ -644,6 +689,18 @@ ls_instance() {
       read -r OPENSLIDES_ADMIN_PASSWORD \
         < "${instance}/secrets/${ADMIN_SECRETS_FILE}"
     fi
+    # Parse user credentials file
+    if [[ -r "${instance}/secrets/${USER_SECRETS_FILE}" ]]; then
+      local user_secrets="${instance}/secrets/${USER_SECRETS_FILE}"
+      local OPENSLIDES_USER_FIRSTNAME=$($YQ eval .first_name "${user_secrets}")
+      local OPENSLIDES_USER_LASTNAME=$($YQ eval .last_name "${user_secrets}")
+      local OPENSLIDES_USER_PASSWORD=$($YQ eval .default_password "${user_secrets}")
+      local OPENSLIDES_USER_EMAIL=$($YQ eval .email "${user_secrets}")
+      if [[ -n "${OPENSLIDES_USER_FIRSTNAME}" ]] &&
+          [[ -n "${OPENSLIDES_USER_LASTNAME}" ]]; then
+        user_name="${OPENSLIDES_USER_FIRSTNAME} ${OPENSLIDES_USER_LASTNAME}"
+      fi
+    fi
   fi
 
   # --metadata
@@ -678,6 +735,9 @@ ls_instance() {
       --arg "status"        "$sym" \
       --arg "port"          "$port" \
       --arg "superadmin"    "$OPENSLIDES_ADMIN_PASSWORD" \
+      --arg "user_name"     "$user_name" \
+      --arg "user_password" "$OPENSLIDES_USER_PASSWORD" \
+      --arg "user_email"    "$OPENSLIDES_USER_EMAIL" \
       --arg "metadata"      "$(printf "%s\n" "${metadata[@]}")" \
       $jq_image_version_args \
       "{
@@ -690,6 +750,11 @@ ls_instance() {
             status:     \$status,
             port:       \$port,
             superadmin: \$superadmin,
+            user: {
+              user_name:    \$user_name,
+              user_password: \$user_password,
+              user_email: \$user_email
+            },
             metadata:   \$metadata,
             versions: {
               # Iterate over all known services; their values get defined by jq
@@ -855,8 +920,32 @@ ask_start() {
     Y|y|Yes|yes|YES|"")
       instance_start ;;
     *)
-      echo "Not starting instance." ;;
+      echo "Not starting instance."
+      return 2
+      ;;
   esac
+}
+
+instance_online_setup() {
+  # Run setup steps that require the instance to be running
+  #
+  # TODO: As long as the openslides tool can't determine when the instance is
+  # ready for its `initial-data` command, we must make a best effort to wait
+  # long enough.  Hopefully, this method can be replaced with a straight up
+  # call to initial-data in the near future.
+  echo "Waiting for instance to become ready."
+  sleep 20
+  until instance_health_status "$PORT"; do
+    sleep 5
+  done
+  until "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts); do
+    sleep 5
+    echo "Waiting for datastore to load initial data."
+  done
+  if [[ -n "$OPT_ADD_ACCOUNT" ]]; then
+    "${MANAGEMENT_TOOL}" create-user $(openslides_connect_opts) \
+      -f "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
+  fi
 }
 
 instance_start() {
@@ -868,15 +957,6 @@ instance_start() {
       docker stack deploy -c "$DCCONFIG" "$PROJECT_STACK_NAME"
       ;;
   esac
-  # TODO: As long as the openslides tool can't determine when the instance is
-  # ready for its `initial-data` command, we must make a best effort to wait
-  # long enough.  Hopefully, this method can be replaced with a straight up
-  # call to initial-data in the near future.
-  sleep 5
-  until "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts); do
-    sleep 5
-    echo "Waiting for datastore to load initial data"
-  done
 }
 
 instance_stop() {
@@ -1184,6 +1264,7 @@ longopt=(
   # adding instances
   clone-from:
   local-only
+  no-add-account
   www
 
   # adding & upgrading instances
@@ -1233,6 +1314,10 @@ while true; do
     -O | --management-tool)
       OPT_MANAGEMENT_TOOL=$2
       shift 2
+      ;;
+    --no-add-account)
+      OPT_ADD_ACCOUNT=
+      shift 1
       ;;
     -a|--all)
       OPT_LONGLIST=1
@@ -1476,11 +1561,14 @@ case "$MODE" in
     # If not specified, set management tool to "-", i.e., track the latest
     # version
     [[ -n "$OPT_MANAGEMENT_TOOL" ]] || OPT_MANAGEMENT_TOOL="-"
+    query_user_account_name
     select_management_tool
     PORT=$(next_free_port)
     create_instance_dir
     update_config_instance_specifics
     create_admin_secrets_file
+    create_user_secrets_file "${OPENSLIDES_USER_FIRSTNAME}" \
+      "${OPENSLIDES_USER_LASTNAME}" "${OPENSLIDES_USER_EMAIL}"
     update_config_services_db_connect_params
     recreate_compose_yml
     append_metadata "$PROJECT_DIR" ""
@@ -1501,7 +1589,11 @@ case "$MODE" in
         instance_autoscale
       fi
     fi
-    ask_start
+    echo 'INFO: The instance must be started for the setup process to finish.' \
+          'If you would like to edit config.yml manually, you may do so now.' \
+          "Once you're ready, please select 'Y'."
+    ask_start &&
+    instance_online_setup
     ;;
   clone)
     CLONE_FROM_DIR="${INSTANCES}/${CLONE_FROM}"
@@ -1521,7 +1613,7 @@ case "$MODE" in
       append_metadata "$PROJECT_DIR" "No HAProxy config added (--local-only)"
     add_to_haproxy_cfg
     run_hook "post-${MODE}"
-    ask_start
+    ask_start || true
     ;;
   list)
     [[ -z "$OPT_PRECISE_PROJECT_NAME" ]] || PROJECT_NAME="^${PROJECT_NAME}$"
