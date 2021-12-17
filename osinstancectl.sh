@@ -264,7 +264,7 @@ recreate_compose_yml() {
 openslides_connect_opts() {
   local port=$(value_from_config_yml "$PROJECT_DIR" '.port')
   local secret="$PROJECT_DIR/secrets/manage_auth_password"
-  echo "-a 127.0.0.1:${port} --password-file $secret"
+  echo "-a 127.0.0.1:${port} --password-file $secret --no-ssl"
 }
 
 gen_pw() {
@@ -798,8 +798,8 @@ instance_start() {
   # ready for its `initial-data` command, we must make a best effort to wait
   # long enough.  Hopefully, this method can be replaced with a straight up
   # call to initial-data in the near future.
-  sleep 20
-  until openslides $(openslides_connect_opts) initial-data; do
+  sleep 5
+  until "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts); do
     sleep 5
     echo "Waiting for datastore to load initial data"
   done
