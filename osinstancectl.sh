@@ -369,7 +369,9 @@ create_admin_secrets_file() {
   echo "Generating superadmin password..."
   local admin_secret="${PROJECT_DIR}/secrets/${ADMIN_SECRETS_FILE}"
   rm "$admin_secret"
-  gen_pw | tr -d '\n' > "$admin_secret"
+  touch "$admin_secret"
+  chmod 600 "$admin_secret"
+  gen_pw | tr -d '\n' >> "$admin_secret"
 }
 
 create_instance_dir() {
@@ -382,6 +384,11 @@ create_instance_dir() {
   "${MANAGEMENT_TOOL}" setup $template $config "$PROJECT_DIR" ||
     fatal "Error during \`"${MANAGEMENT_TOOL}" setup\`"
   touch "${PROJECT_DIR}/${MARKER}"
+
+  # Restrict access to secrets b/c the management tool sets very open access
+  # permissions
+  chmod -R 600 "${PROJECT_DIR}/secrets/"
+  chmod 700 "${PROJECT_DIR}/secrets"
 
   # Note which version of the openslides tool is compatible with the instance,
   # unless special string "-" is given
