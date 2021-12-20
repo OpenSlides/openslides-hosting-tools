@@ -139,7 +139,8 @@ Options:
     -j, --json         Enable JSON output format
 
   for add & update:
-    -t, --tag=TAG      Specify the image tags for all OpenSlides components
+    -t, --tag=TAG      Specify the default image tag for all OpenSlides
+                       components (defaults.tag).
     -O, --management-tool=[PATH|NAME|-]
                        Specify the 'openslides' executable to use.  The program
                        must be available in the management tool's versions
