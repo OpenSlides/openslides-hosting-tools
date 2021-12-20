@@ -952,13 +952,12 @@ instance_online_setup() {
   # long enough.  Hopefully, this method can be replaced with a straight up
   # call to initial-data in the near future.
   echo "Waiting for instance to become ready."
-  sleep 20
   until instance_health_status "$PORT"; do
     sleep 5
   done
   until "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts); do
-    sleep 5
     echo "Waiting for datastore to load initial data."
+    sleep 5
   done
   if [[ -n "$OPT_ADD_ACCOUNT" ]]; then
     "${MANAGEMENT_TOOL}" create-user $(openslides_connect_opts) \
