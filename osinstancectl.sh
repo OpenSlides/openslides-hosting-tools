@@ -427,7 +427,12 @@ last_name: "$last_name"
 username: "$first_name $last_name"
 email: "$email"
 default_password: "$PW"
+is_active: true
 organization_management_level: can_manage_organization
+committee__management_level:
+  1: can_manage
+group__ids:
+  1: [1, 2]
 EOF
   fi
 }
