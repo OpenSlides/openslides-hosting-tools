@@ -80,7 +80,6 @@ SYM_ERROR="XX"
 SYM_UNKNOWN="??"
 SYM_STOPPED="__"
 JQ="jq --monochrome-output"
-YQ=yq
 
 enable_color() {
   NCOLORS=$(tput colors) # no. of colors
@@ -272,7 +271,7 @@ next_free_port() {
   local PORT
   HIGHEST_PORT_IN_USE=$(
     find "${INSTANCES}" -type f -name "config.yml" -print0 |
-    xargs -0 $YQ --no-doc eval '.port' | sort -rn | head -1
+    xargs -0 yq --no-doc eval '.port' | sort -rn | head -1
   )
   [[ -n "$HIGHEST_PORT_IN_USE" ]] || HIGHEST_PORT_IN_USE=61000
   PORT=$((HIGHEST_PORT_IN_USE + 1))
@@ -296,11 +295,11 @@ value_from_config_yml() {
   target="$2"
   result=null
   if [[ -f "${instance}/config.yml" ]]; then
-    result=$($YQ eval $target "${instance}/config.yml")
+    result=$(yq eval $target "${instance}/config.yml")
   fi
   if [[ "$result" == "null" ]]; then
     if [[ -f "${CONFIG_YML_TEMPLATE}" ]]; then
-      result=$($YQ eval $target "${CONFIG_YML_TEMPLATE}")
+      result=$(yq eval $target "${CONFIG_YML_TEMPLATE}")
     fi
   fi
   [[ "$result" != "null" ]] || return 1
@@ -311,7 +310,7 @@ update_config_yml() {
   local file=$1
   local expr=$2
   [[ -f "$file" ]] || touch "$file"
-  $YQ eval -i "$expr" "$file"
+  yq eval -i "$expr" "$file"
 }
 
 recreate_compose_yml() {
@@ -674,7 +673,7 @@ ls_instance() {
     declare -A service_versions
     while read -r service version; do
       service_versions[$service]=$version
-    done < <($YQ eval '.services.*.image | {(path | join(".")): .}' \
+    done < <(yq eval '.services.*.image | {(path | join(".")): .}' \
         "${instance}/${DCCONFIG_FILENAME}" |
       gawk -F': ' '{ split($1, a, /\./); print a[2], $2}')
     # Add management tool version to list of services.  This is not actually
@@ -693,10 +692,10 @@ ls_instance() {
     # Parse user credentials file
     if [[ -r "${instance}/secrets/${USER_SECRETS_FILE}" ]]; then
       local user_secrets="${instance}/secrets/${USER_SECRETS_FILE}"
-      local OPENSLIDES_USER_FIRSTNAME=$($YQ eval .first_name "${user_secrets}")
-      local OPENSLIDES_USER_LASTNAME=$($YQ eval .last_name "${user_secrets}")
-      local OPENSLIDES_USER_PASSWORD=$($YQ eval .default_password "${user_secrets}")
-      local OPENSLIDES_USER_EMAIL=$($YQ eval .email "${user_secrets}")
+      local OPENSLIDES_USER_FIRSTNAME=$(yq eval .first_name "${user_secrets}")
+      local OPENSLIDES_USER_LASTNAME=$(yq eval .last_name "${user_secrets}")
+      local OPENSLIDES_USER_PASSWORD=$(yq eval .default_password "${user_secrets}")
+      local OPENSLIDES_USER_EMAIL=$(yq eval .email "${user_secrets}")
       if [[ -n "${OPENSLIDES_USER_FIRSTNAME}" ]] &&
           [[ -n "${OPENSLIDES_USER_LASTNAME}" ]]; then
         user_name="${OPENSLIDES_USER_FIRSTNAME} ${OPENSLIDES_USER_LASTNAME}"
