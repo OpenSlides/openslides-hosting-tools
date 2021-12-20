@@ -276,8 +276,15 @@ next_free_port() {
   local HIGHEST_PORT_IN_USE
   local PORT
   HIGHEST_PORT_IN_USE=$(
-    find "${INSTANCES}" -type f -name "config.yml" -print0 |
-    xargs -0 yq --no-doc eval '.port' | sort -rn | head -1
+    {
+      # OS3 instance ports
+      find "${OS3_INSTANCES}" -type f -name ".env" -print0 |
+      xargs -0 grep -h "EXTERNAL_HTTP_PORT" |
+      cut -d= -f2 | tr -d \"\'
+      # OS4 instance ports
+      find "${INSTANCES}" -type f -name "config.yml" -print0 |
+      xargs -0 yq --no-doc eval '.port'
+    } | sort -rn | head -1
   )
   [[ -n "$HIGHEST_PORT_IN_USE" ]] || HIGHEST_PORT_IN_USE=61000
   PORT=$((HIGHEST_PORT_IN_USE + 1))
