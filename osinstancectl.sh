@@ -25,6 +25,9 @@ HOOKS_DIR=
 MANAGEMENT_TOOL_BINDIR="/usr/local/lib/openslides-manage/versions"
 MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/latest"
 
+# Legacy instances path
+OS3_INSTANCES="/srv/openslides/docker-instances"
+
 ME=$(basename -s .sh "${BASH_SOURCE[0]}")
 CONFIG="/etc/os4instancectl"
 MARKER=".osinstancectl-marker"
@@ -205,6 +208,9 @@ arg_check() {
     "create")
       [[ ! -d "$PROJECT_DIR" ]] || {
         fatal "Instance '${PROJECT_NAME}' already exists."
+      }
+      [[ ! -d "${OS3_INSTANCES}/${PROJECT_NAME}" ]] || {
+        fatal "Instance '${PROJECT_NAME}' already exists as an OpenSlides 3 instance."
       }
       ;;
   esac
