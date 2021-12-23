@@ -915,13 +915,10 @@ list_instances() {
 
 clone_instance_dir() {
   marker_check "$CLONE_FROM_DIR"
-  rsync -axv \
-    --exclude="secrets/${DB_SECRETS_FILE}" \
-    --exclude="secrets/*_postgres_password" \
-    "${CLONE_FROM_DIR}/config.yml" \
-    "${CLONE_FROM_DIR}/${MARKER}" \
-    "${CLONE_FROM_DIR}/secrets" \
-    "${PROJECT_DIR}/"
+  cp -av "${CLONE_FROM_DIR}/config.yml" "${PROJECT_DIR}/"
+  cp -av "${CLONE_FROM_DIR}/secrets/superadmin" "${PROJECT_DIR}/secrets/"
+  [[ ! -f "${CLONE_FROM_DIR}/secrets/user.yml" ]] ||
+    cp -av "${CLONE_FROM_DIR}/secrets/user.yml" "${PROJECT_DIR}/secrets/"
 }
 
 append_metadata() {
@@ -946,11 +943,6 @@ ask_start() {
 
 instance_online_setup() {
   # Run setup steps that require the instance to be running
-  #
-  # TODO: As long as the openslides tool can't determine when the instance is
-  # ready for its `initial-data` command, we must make a best effort to wait
-  # long enough.  Hopefully, this method can be replaced with a straight up
-  # call to initial-data in the near future.
   echo "Waiting for instance to become ready."
   until instance_health_status "$PORT"; do
     sleep 5
@@ -1616,8 +1608,10 @@ case "$MODE" in
     CLONE_FROM_DIR="${INSTANCES}/${CLONE_FROM}"
     arg_check || { usage; exit 2; }
     echo "Creating new instance: $PROJECT_NAME (based on $CLONE_FROM)"
+    select_management_tool
     PORT=$(next_free_port)
     run_hook "pre-${MODE}"
+    create_instance_dir
     clone_instance_dir
     update_config_instance_specifics
     update_config_services_db_connect_params
@@ -1625,7 +1619,8 @@ case "$MODE" in
     append_metadata "$PROJECT_DIR" ""
     append_metadata "$PROJECT_DIR" "Cloned from $CLONE_FROM on $(date)"
     append_metadata "$PROJECT_DIR" \
-      "$(date +"%F %H:%M"): image=$DOCKER_IMAGE_TAG_OPENSLIDES manage=$MANAGEMENT_TOOL_HASH"
+      "$(date +"%F %H:%M"): image=$(value_from_config_yml "$PROJECT_DIR" '.defaults.tag')" \
+      "manage=$MANAGEMENT_TOOL_HASH"
     [[ -z "$OPT_LOCALONLY" ]] ||
       append_metadata "$PROJECT_DIR" "No HAProxy config added (--local-only)"
     add_to_haproxy_cfg
