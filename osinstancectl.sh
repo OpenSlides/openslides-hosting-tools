@@ -196,6 +196,14 @@ fatal() {
     exit 23
 }
 
+warn() {
+    echo 1>&2 "${COL_RED}WARN${COL_NORMAL}: $*"
+}
+
+info() {
+    echo 1>&2 "${COL_GREEN}INFO${COL_NORMAL}: $*"
+}
+
 check_for_dependency () {
     [[ -n "$1" ]] || return 0
     command -v "$1" > /dev/null || { fatal "Dependency not found: $1"; }
@@ -275,7 +283,7 @@ select_management_tool() {
   fi
   MANAGEMENT_TOOL_HASH=$(hash_management_tool)
   if [[ -x "$MANAGEMENT_TOOL" ]]; then
-    echo "INFO: Using 'openslides' tool at $MANAGEMENT_TOOL"
+    info "Using 'openslides' tool at $MANAGEMENT_TOOL"
   else
     fatal "$MANAGEMENT_TOOL not found."
   fi
@@ -1016,7 +1024,7 @@ instance_erase() {
   case "$DEPLOYMENT_MODE" in
     "stack")
       instance_stop || true
-      echo "INFO: The database will not be deleted automatically for Swarm deployments." \
+      info "The database will not be deleted automatically for Swarm deployments." \
         "You must set up a mid-erase hook to perform the deletion."
       ;;
   esac
@@ -1074,7 +1082,7 @@ instance_update() {
   }
 
   instance_has_services_running "$PROJECT_STACK_NAME" || {
-    echo "WARN: ${PROJECT_NAME} is not running."
+    warn "${PROJECT_NAME} is not running."
     echo "      The configuration has been updated and the instance will" \
          "be upgraded upon its next start."
     return 0
@@ -1136,7 +1144,7 @@ instance_autoscale() {
   instance_has_services_running "$PROJECT_STACK_NAME" ||
     running=
   if [[ -z "$running" ]]; then
-    echo "WARN: ${PROJECT_NAME} is not running."
+    warn "${PROJECT_NAME} is not running."
     echo "      The configuration will be updated and changes will take effect" \
          "upon it's next start."
   fi
@@ -1200,7 +1208,7 @@ instance_autoscale() {
     for service in "${!SCALE_TO[@]}"
     do
       envname=$(get_service_envvar_name "$service") || {
-        echo "WARN: $service is not configurable in .env, skipping"
+        warn "$service is not configurable in .env, skipping"
         continue
       }
       from=$(get_scale_env "$envname")
@@ -1234,7 +1242,7 @@ instance_autoscale() {
           SCALE_COMMANDS[$service]="docker service scale ${PROJECT_STACK_NAME}_${service}=${SCALE_TO[$service]}"
         fi
         envname=$(get_service_envvar_name "$service") || {
-          echo "WARN: $service is not configurable in .env, scale will not persist"
+          warn "$service is not configurable in .env, scale will not persist"
           continue
         }
         SCALE_ENVVARS[$service]="set_scale_env $envname ${SCALE_TO[$service]}"
@@ -1246,7 +1254,7 @@ instance_autoscale() {
           SCALE_COMMANDS[$service]="docker service scale ${PROJECT_STACK_NAME}_${service}=${SCALE_TO[$service]}"
         fi
         envname=$(get_service_envvar_name "$service") || {
-          echo "WARN: $service is not configurable in .env, scale will not persist"
+          warn "$service is not configurable in .env, scale will not persist"
           continue
         }
         SCALE_ENVVARS[$service]="set_scale_env $envname ${SCALE_TO[$service]}"
@@ -1297,7 +1305,7 @@ run_hook() (
   shift
   if [[ -x "$hook" ]]; then
     cd "$PROJECT_DIR"
-    echo "INFO: Running $hook_name hook..."
+    info "Running $hook_name hook..."
     set +eu
     . "$hook"
     set -eu
@@ -1662,9 +1670,9 @@ case "$MODE" in
         instance_autoscale
       fi
     fi
-    echo 'INFO: The instance must be started for the setup process to finish.' \
-          'If you would like to edit config.yml manually, you may do so now.' \
-          "Once you're ready, please select 'Y'."
+    warn 'The instance must be started for the setup process to finish.' \
+      'If you would like to edit config.yml manually, you may do so now.' \
+      "Once you're ready, please select 'Y'."
     ask_start &&
     instance_online_setup
     ;;
