@@ -104,7 +104,8 @@ Manage OpenSlides Docker instances.
 
 Actions:
   ls                   List instances and their status.  <pattern> is
-                       a grep ERE search pattern in this case.
+                       a grep ERE search pattern in this case.  For details on
+                       the output format, see below.
   add                  Add a new instance for the given domain (requires FQDN)
   rm                   Remove <instance> (requires FQDN)
   start                Start, i.e., (re)deploy an existing instance
@@ -168,11 +169,25 @@ Options:
                        read from metadata.txt
     --dry-run          Print out actions instead of actually performing them
 
-Colored status indicators in ls mode:
-  green                The instance appears to be fully functional
-  red                  The instance is running but is unreachable
-  yellow               The instance's status can not be determined
-  gray                 The instance has been stopped
+The ls output:
+
+  The columnar output lists each instance's status, name, version(s) and
+  an optional comment.
+
+  Colored status indicators:
+    green              The instance appears to be fully functional
+    red                The instance is running but is unreachable
+    yellow             The instance's status can not be determined
+    gray               The instance has been stopped
+
+  Version information in ls mode:
+
+    The listed version is the containers' Docker image tag currently in use.
+    Normally, this is a single tag.  In case there is more than one tag in use,
+    the display format is extended to include more detail.  It lists each tag
+    with the number of containers running this tag, separated by slashes, as
+    well as a final sum of the number of different registries and tags in
+    square brackets, e.g., "[1:2]".
 EOF
 }
 
@@ -566,21 +581,32 @@ currently_running_version() {
       docker stack services --format '{{ .Image }}' "${PROJECT_STACK_NAME}" |
       gawk -F: '# Skip expected non-OpenSlides images
         $1 == "redis" && $2 == "latest" { next }
-        { print $NF }'
+        1
+        '
       ;;
   esac |
-  gawk '
-    { a[$0]++ }
+  gawk -F: '
+    {
+      # Extract only the registry address from the image name (remove the
+      # last element)
+      sub(/\/[^\/]+$/, "", $1)
+      reg[$1]++
+      img[$2]++
+    }
     END {
-      n = asorti(a, sorted, "@val_num_desc")
+      # List image tags
+      n = asorti(img, sorted, "@val_num_desc")
       for (i = 1; i <= n; i++) {
         if (n == 1) {
           printf("%s", sorted[i])
         } else {
-          printf("%s(%d)", sorted[i], a[sorted[i]])
-          if (i < length(a)) printf("/")
+          # If more than one image tag is in use, list them all with a count
+          printf("%s(%d)", sorted[i], img[sorted[i]])
+          if (i < length(img)) printf("/")
         }
       }
+      # Add number of registries and tags if there are more than 1
+      if (length(reg) > 1 || n > 1) printf(" [%d:%d]", length(reg), n)
     }
   '
 }
