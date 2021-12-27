@@ -137,8 +137,8 @@ Options:
     --search-metadata  Include metadata
     --fast             Include less information to increase listing speed
     --patient          Increase timeouts
-    --version          Filter results based on the version reported by
-                       OpenSlides (implies --online)
+    --version=REGEXP   Filter results based on the version reported by
+                       \`$ME ls\` (not --long; implies --online).
     -j, --json         Enable JSON output format
 
   for add & update:
@@ -613,11 +613,19 @@ currently_running_version() {
 
 highlight_match() {
   # Highlight search term match in string
-  if [[ -n "$NCOLORS" ]] && [[ -n "$PROJECT_NAME" ]]; then
-    sed -e "s/${PROJECT_NAME}/$(tput smso)&$(tput rmso)/g" <<< "$1"
-  else
+  # By default, the PROJECT_NAME is matched but a custom sed-compatible search
+  # term can be given as an optional second argument.
+
+  # Return string as is if colors are disabled.
+  if [[ -z "$NCOLORS" ]]; then
     echo "$1"
+    return 0
   fi
+
+  local string filter
+  string=$1
+  filter=${2:-PROJECT_NAME}
+  sed -e "s/${filter}/$(tput smso)&$(tput rmso)/g" <<< "$string"
 }
 
 ls_instance() {
@@ -680,9 +688,9 @@ ls_instance() {
   esac
 
   # Filter based on comparison with the currently running version (as reported
-  # by the Web frontend)
+  # by currently_running_version())
   [[ -z "$FILTER_VERSION" ]] ||
-    { [[ "$version" = "$FILTER_VERSION" ]] || return 1; }
+    { grep -E -q "$FILTER_VERSION" <<< "$version" || return 1; }
 
   # Parse metadata for first line (used in overview)
   local first_metadatum=
@@ -817,7 +825,8 @@ ls_instance() {
   # Basic output
   if [[ -z "$OPT_LONGLIST" ]] && [[ -z "$OPT_METADATA" ]]
   then
-    printf "%s %-30s\t%-10s\t%s\n" "$sym" "$shortname" "$version" "$first_metadatum"
+    printf "%s %-30s\t%-10s\t%s\n" "$sym" "$shortname" \
+      "$(highlight_match "$version" "$FILTER_VERSION")" "$first_metadatum"
   else
     # Hide details if they are going to be included in the long output format
     printf "%s %-30s\n" "$sym" "$shortname"
@@ -832,7 +841,8 @@ ls_instance() {
     printf "   ├ %-17s %s\n" "Local port:" "$port"
     printf "   ├ %-17s\n" "Versions:"
     for service in "${!service_versions[@]}"; do
-      printf "   │  ├ %-17s %s\n" "${service}:" "${service_versions[$service]}"
+      printf "   │  ├ %-17s %s\n" "${service}:" \
+        "$(highlight_match "${service_versions[$service]}" "$FILTER_VERSION")"
     done | sort
   fi
 
