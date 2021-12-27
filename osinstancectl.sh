@@ -111,8 +111,8 @@ Actions:
   start                Start, i.e., (re)deploy an existing instance
   stop                 Stop a running instance
   update               Update OpenSlides services to a new images
-  erase                Remove an instance's volumes (stops the instance if
-                       necessary)
+  erase                Execute the mid-erase hook without otherwise removing
+                       the instance.
   autoscale            Scale relevant services of an instance based on it's
                        ACCOUNTS metadatum (adjust values in CONFIG file)
 
