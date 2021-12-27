@@ -1014,6 +1014,34 @@ instance_erase() {
 }
 
 instance_update() {
+  # Update instance to a new version.
+  #
+  # This function does two things: 1) it updates the instance's config.yml; 2)
+  # for running instances, it updates the containers while minimizing service
+  # disruptions.  In particular, it ensures that user sessions are not lost.
+
+  # Check if the instance's configuration is suitable for the automatic update.
+  #
+  # The update function only sets the default tag (.defaults.tag).  More
+  # complex configurations, e.g., service-specific tag overrides, can not be
+  # updated automatically.  In these cases, require --force.
+  #
+  if [[ $(yq eval '.services.*.tag' "${PROJECT_DIR}/config.yml" | wc -l) -ne 1 ]] &&
+      [[ "$OPT_FORCE" -ne 1 ]]
+  then
+    fatal "Custom service tags found which cannot be updated automatically! " \
+      "Refusing update.  (Use --force to update the default tag anyway.)"
+  fi
+  # Equally, it would be a concern if there were images from more than one
+  # registry in use.  For simplicity's sake, consider any explicitly configured
+  # registries a problem.
+  if [[ $(yq eval '.services.*.containerRegistry' "${PROJECT_DIR}/config.yml" | wc -l) -ne 1 ]] &&
+      [[ "$OPT_FORCE" -ne 1 ]]
+  then
+    fatal "Custom service containerRegistry found. " \
+      "Refusing update.  (Use --force to update the default tag anyway.)"
+  fi
+
   # Update values in config.yml
   [[ -z "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] || {
     update_config_yml "${PROJECT_DIR}/config.yml" \
@@ -1035,7 +1063,6 @@ instance_update() {
       "Updated management tool to" "${cfg_hash} ($MANAGEMENT_TOOL_HASH)"
   }
 
-
   instance_has_services_running "$PROJECT_STACK_NAME" || {
     echo "WARN: ${PROJECT_NAME} is not running."
     echo "      The configuration has been updated and the instance will" \
@@ -1043,6 +1070,7 @@ instance_update() {
     return 0
   }
 
+  # For already running instances, recreate containers with new versions
   instance_start
 }
 
