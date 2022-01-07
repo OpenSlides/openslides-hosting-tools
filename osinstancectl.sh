@@ -441,9 +441,9 @@ create_user_secrets_file() {
     last_name=$2
     email=$3
     PW=$(gen_pw)
-    touch "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
-    chmod 600 "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
-    cat << EOF >> "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
+    touch "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}.setup"
+    chmod 600 "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}.setup"
+    cat << EOF >> "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}.setup"
 ---
 first_name: "$first_name"
 last_name: "$last_name"
@@ -985,19 +985,39 @@ ask_start() {
   esac
 }
 
-instance_online_setup() {
+instance_setup_initialdata() {
   # Run setup steps that require the instance to be running
+  local PORT=$(value_from_config_yml "$PROJECT_DIR" '.port')
   echo "Waiting for instance to become ready."
   until instance_health_status "$PORT"; do
     sleep 5
   done
-  until "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts); do
+  local ec=
+  while :; do
     echo "Waiting for datastore to load initial data."
+    {
+      "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts)
+      ec=$?
+    } || :
+    # Check initial-data success
+    if [[ $ec -eq 0 ]] || [[ $ec -eq 2 ]]; then
+      # 0: initial-data was successful; expected during initial setup
+      # 2: command refused to run because the database already contains data;
+      #    expected during instance_start() after the initial setup
+      break
+    fi
     sleep 5
   done
-  if [[ -n "$OPT_ADD_ACCOUNT" ]]; then
+}
+
+instance_setup_user() {
+  # Add a user if the setup secrets file exists.  After the user has been
+  # created, the file is renamed.
+  local secret="${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
+  if [[ -r "${secret}.setup" ]]; then
     "${MANAGEMENT_TOOL}" create-user $(openslides_connect_opts) \
-      -f "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
+      -f "${secret}.setup"
+    mv "${secret}.setup" "$secret"
   fi
 }
 
@@ -1010,6 +1030,8 @@ instance_start() {
       docker stack deploy -c "$DCCONFIG" "$PROJECT_STACK_NAME"
       ;;
   esac
+  instance_setup_initialdata
+  instance_setup_user
 }
 
 instance_stop() {
@@ -1670,11 +1692,7 @@ case "$MODE" in
         instance_autoscale
       fi
     fi
-    warn 'The instance must be started for the setup process to finish.' \
-      'If you would like to edit config.yml manually, you may do so now.' \
-      "Once you're ready, please select 'Y'."
-    ask_start &&
-    instance_online_setup
+    ask_start || true
     ;;
   clone)
     CLONE_FROM_DIR="${INSTANCES}/${CLONE_FROM}"
