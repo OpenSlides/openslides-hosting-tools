@@ -612,7 +612,7 @@ currently_running_version() {
         }
       }
       # Add number of registries and tags if there are more than 1
-      if (length(reg) > 1 || n > 1) printf(" [%d:%d]", length(reg), n)
+      if (length(reg) > 1 || n > 1) printf("[%d:%d]", length(reg), n)
     }
   '
 }
