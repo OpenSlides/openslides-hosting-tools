@@ -15,7 +15,7 @@
 # Defaults
 DEFAULT_URL="https://github.com/OpenSlides/openslides-manage-service/releases/download/latest/openslides"
 DEFAULT_REPO="https://github.com/OpenSlides/OpenSlides"
-DEFAULT_BINDIR="/usr/local/lib/openslides-manage/versions"
+DEFAULT_BINDIR="/usr/local/lib/openslides-manage"
 
 set -eu
 ME=$(basename -s .sh "${BASH_SOURCE[0]}")
@@ -74,8 +74,8 @@ install_version(){
   echo "Installing as $LATEST."
   install -m 755 "$TEMPFILE" "$LATEST"
   [[ "$OPT_LINK" -eq 0 ]] || {
-    echo "Linking as ${BINDIR}/latest."
-    ln -sf "$HASH" "${BINDIR}/latest"
+    echo "Linking as ${BINDIR}/versions/latest."
+    ln -sf "$HASH" "${BINDIR}/versions/latest"
   }
 }
 
@@ -118,11 +118,17 @@ while true; do
   esac
 done
 
+if [[ $# -ne 0 ]]; then
+  printf "ERROR: Wrong number of arguments.\n\n"
+  usage
+  exit 23
+fi
+
 [[ -n "$URL" ]]    || URL=$DEFAULT_URL
 [[ -n "$REPO" ]]   || REPO=$DEFAULT_REPO
 [[ -n "$BINDIR" ]] || BINDIR=$DEFAULT_BINDIR
 
-mkdir -p "$BINDIR"
+mkdir -p "$BINDIR"/versions
 TEMPFILE=$(mktemp --suffix .bin)
 
 # Build or download
@@ -164,7 +170,7 @@ fi
 
 read -r HASH x < <(sha256sum "$TEMPFILE")
 unset x
-LATEST="${BINDIR}/${HASH}"
+LATEST="${BINDIR}/versions/${HASH}"
 
 echo "Testing functionality with --help."
 chmod +x "$TEMPFILE"
@@ -177,7 +183,7 @@ fi
 
 if [[ "$REV" ]]; then
   # If built from source, create git commit-based symlink
-  COMMITS_DIR=$(realpath "${BINDIR}/../commits")
+  COMMITS_DIR=$(realpath "${BINDIR}/commits")
   mkdir -p "$COMMITS_DIR"
   COMMITS_PATH="${COMMITS_DIR}/${COMMIT}"
   if [[ -z "$OPT_FORCE" ]] && [[ -h "$COMMITS_PATH" ]] && [[ -x "$(realpath "$COMMITS_PATH")" ]]; then
@@ -187,8 +193,8 @@ if [[ "$REV" ]]; then
     echo "Linking as $COMMITS_PATH."
     ln -sf "../versions/${HASH}" "$COMMITS_PATH"
   fi
-elif [[ -z "$OPT_FORCE" ]] &&
-    [[ -x "$LATEST" ]] && [[ "$(basename "$(realpath "${BINDIR}/latest")")" = "$HASH" ]]; then
+elif [[ -z "$OPT_FORCE" ]] && [[ -x "$LATEST" ]] &&
+    [[ "$(basename "$(realpath "${BINDIR}/versions/latest")")" = "$HASH" ]]; then
   echo "Newest version already available."
 else
   install_version
