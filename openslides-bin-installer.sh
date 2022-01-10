@@ -63,8 +63,8 @@ EOF
 }
 
 prereq_check() {
-  command -v go > /dev/null || {
-    echo "ERROR: go not found."
+  command -v docker > /dev/null || {
+    echo "ERROR: docker not found."
     exit 23
   }
 }
@@ -161,7 +161,8 @@ if [[ "$REV" ]]; then
   git -C "$BUILD_DIR" submodule update openslides-manage-service
   (
     cd "${BUILD_DIR}/openslides-manage-service"
-    go build -o "$TEMPFILE" ./cmd/openslides
+    make openslides
+    mv openslides "$TEMPFILE"
   )
 else
   echo "Downloading $URL."
