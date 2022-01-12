@@ -486,7 +486,10 @@ create_instance_dir() {
 
   # Due to a bug in "openslides", the db-data directory is created even if the
   # stack's Postgres service that would require it is disabled.
-  if [[ $(value_from_config_yml "$PROJECT_DIR" '.disablePostgres') == "true" ]]; then
+  # XXX: This is going to be fixed in the near future.  For now, remain
+  # backwards-compatible.
+  if [[ -d "${PROJECT_DIR}/db-data" ]] && [[ $(value_from_config_yml "$PROJECT_DIR" '.disablePostgres') == "true" ]]
+  then
     rmdir "${PROJECT_DIR}/db-data"
   fi
 
