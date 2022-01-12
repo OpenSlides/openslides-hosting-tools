@@ -381,6 +381,8 @@ update_config_instance_specifics() {
   if [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]]; then
     update_config_yml "${PROJECT_DIR}/config.yml" ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
   fi
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".services.proxy.environment.ALLOWED_HOSTS = \"127.0.0.1 $PROJECT_NAME\""
 }
 
 update_config_services_db_connect_params() {
@@ -492,10 +494,6 @@ create_instance_dir() {
   then
     rmdir "${PROJECT_DIR}/db-data"
   fi
-
-  # TODO: still necessary for OS4?
-  # update_env_file "$temp_file" "ALLOWED_HOSTS" "\"127.0.0.1 ${PROJECT_NAME} www.${PROJECT_NAME}\""
-  # update_env_file "$temp_file" "INSTANCE_URL_SCHEME" "http"
 }
 
 add_to_haproxy_cfg() {
