@@ -52,7 +52,6 @@ OPT_FORCE=
 OPT_ALLOW_DOWNSCALE=
 OPT_RESET=
 OPT_DRY_RUN=
-OPT_WWW=
 OPT_FAST=
 OPT_PATIENT=
 OPT_USE_PARALLEL="${OPT_USE_PARALLEL:-1}"
@@ -158,8 +157,6 @@ Options:
     --no-add-account   Do not add an additional, customized local admin account
     --clone-from       Create the new instance based on the specified existing
                        instance
-    --www              Add a www subdomain in addition to the specified
-                       instance domain (to be passed to ACME clients)
 
   for autoscale:
     --allow-downscale  Without this option services will only be scaled upward to
@@ -499,14 +496,11 @@ create_instance_dir() {
 add_to_haproxy_cfg() {
   [[ -z "$OPT_LOCALONLY" ]] || return 0
   cp -f /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.osbak &&
-    gawk -v target="${PROJECT_NAME}" -v port="${PORT}" -v www="${OPT_WWW}" '
+    gawk -v target="${PROJECT_NAME}" -v port="${PORT}" '
     BEGIN {
       begin_block = "-----BEGIN AUTOMATIC OPENSLIDES CONFIG-----"
       end_block   = "-----END AUTOMATIC OPENSLIDES CONFIG-----"
       use_server_tmpl = "\tuse-server %s if { hdr_reg(Host) -i ^%s$ }"
-      if ( www == 1 ) {
-        use_server_tmpl = "\tuse-server %s if { hdr_reg(Host) -i ^(www\\.)?%s$ }"
-      }
       server_tmpl = "\tserver     %s 127.0.0.1:%d  weight 0 check"
     }
     $0 ~ begin_block { b = 1 }
@@ -1369,7 +1363,6 @@ longopt=(
   clone-from:
   local-only
   no-add-account
-  www
 
   # adding & upgrading instances
   tag:
@@ -1472,10 +1465,6 @@ while true; do
       ;;
     --local-only)
       OPT_LOCALONLY=1
-      shift 1
-      ;;
-    --www)
-      OPT_WWW=1
       shift 1
       ;;
     --color)
