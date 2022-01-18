@@ -631,6 +631,129 @@ highlight_match() {
   sed -e "s/${filter}/$(tput smso)&$(tput rmso)/g" <<< "$string"
 }
 
+treefmt() {
+  # Tree formatting function, for ls_instance()
+  case $1 in
+    reset)
+      treefmt_var_type_array=()
+      treefmt_var_level_array=()
+      treefmt_var_node_count_per_lvl=()
+      treefmt_var_content_array=()
+      treefmt_var_n=0
+      treefmt_var_node_level=1
+      treefmt_var_max_lvl=$treefmt_var_node_level
+      treefmt_var_max_align=0
+      ;;
+    init)
+      treefmt reset
+      treefmt_var_default_tree_drawing_char=" "
+      treefmt_var_default_tree_paddding_char=" "
+      treefmt_var_draw_cont="├"
+      treefmt_var_draw_close="└"
+      treefmt_var_draw_body="┆"
+      treefmt_var_padding=2
+      treefmt_var_base_indent="   "
+      treefmt_var_indentation_steps=$((treefmt_var_padding + 1)) # 1 is length of $tree_drawing_char
+      treefmt_var_drawing_detail="${OPT_TREEFMT_DRAWING_DETAIL:-1}"
+
+      treefmt_indentation() {
+        local higher_lvl=$((lvl - 1))
+        if [[ ${treefmt_var_drawing_detail} -eq 1 ]]; then
+          for treefmt_var_node_level in $(seq 1 "$higher_lvl"); do
+            local tree_drawing_char=$treefmt_var_default_tree_drawing_char
+            [[ ${treefmt_var_node_count_per_lvl[$treefmt_var_node_level]:-0} -eq 0 ]] ||
+              tree_drawing_char="│"
+            printf "%s%s%${treefmt_var_padding}s" \
+              "$indent" "$tree_drawing_char" "$treefmt_var_default_tree_paddding_char"
+          done
+        else
+          # fast mode: simply print spaces for indentation
+          [[ $higher_lvl -lt 1 ]] || printf "%$((higher_lvl * treefmt_var_indentation_steps))s" " "
+        fi
+      }
+
+      treefmt_format() {
+        for i in $(seq $treefmt_var_n); do
+          local drawing_char=$treefmt_var_draw_close
+          local lvl=${treefmt_var_level_array[$i]}
+          # +1 for space after colon:
+          local align=$((treefmt_var_max_align - lvl * treefmt_var_indentation_steps + 1))
+          local indent=
+          case "${treefmt_var_type_array[$i]}" in
+            node)
+              if [[ ${treefmt_var_drawing_detail} -eq 1 ]]; then
+                local next_node=$((i+1))
+                local next_node_level
+                next_node_level=${treefmt_var_level_array[$next_node]:-0}
+                treefmt_var_node_count_per_lvl[$lvl]=$((treefmt_var_node_count_per_lvl[$lvl] - 1))
+                if [[ "$next_node_level" -lt "$lvl" ]]; then
+                  # if the next node is of a higher level, this node must be;
+                  # closed.  any other nodes of the same level must be part of
+                  # a new subtree.
+                  drawing_char=$treefmt_var_draw_close
+                elif [[ "${treefmt_var_node_count_per_lvl[$lvl]}" -ge 1 ]]; then
+                  # if there are more nodes of the same level, draw continuation character
+                  drawing_char=$treefmt_var_draw_cont
+                fi
+                indent="${treefmt_var_base_indent}$(treefmt_indentation)"
+              else
+                drawing_char=$treefmt_var_draw_cont
+                indent="${treefmt_var_base_indent}$(treefmt_indentation)"
+              fi
+              printf "%s%s%s%-${align}s %s\n" \
+                "$indent" \
+                "$drawing_char" \
+                "$treefmt_var_default_tree_paddding_char" \
+                "${header_array[$i]}:" \
+                "${treefmt_var_content_array[$i]}"
+              ;;
+            body)
+              drawing_char="$treefmt_var_draw_body"
+              indent="${treefmt_var_base_indent}$(treefmt_indentation)"
+              printf "%s\n" "${treefmt_var_content_array[$i]}" | sed "s/^/$indent$drawing_char /"
+              ;;
+          esac
+        done
+      }
+      ;;
+    node)
+      [[ -n $2 ]] || fatal "ProgrammingError: treefmt node name must not be empty"
+      ((treefmt_var_n++))
+      treefmt_var_level_array[$treefmt_var_n]=$treefmt_var_node_level
+      treefmt_var_node_count_per_lvl[$treefmt_var_node_level]=$((
+        treefmt_var_node_count_per_lvl[$treefmt_var_node_level] + 1
+      ))
+      [[ $treefmt_var_node_level -lt $treefmt_var_max_lvl ]] || treefmt_var_max_lvl=$treefmt_var_node_level
+      treefmt_var_type_array[$treefmt_var_n]=$1
+      header_array[$treefmt_var_n]=$2
+      # record longest node header
+      node_header_length=$((treefmt_var_node_level * treefmt_var_indentation_steps + ${#2}))
+      [[ $treefmt_var_max_align -gt $node_header_length ]] ||
+        treefmt_var_max_align=$node_header_length
+      unset node_header_length
+      shift 2
+      treefmt_var_content_array[$treefmt_var_n]="$*"
+      ;;
+    body)
+      ((treefmt_var_n++))
+      treefmt_var_level_array[$treefmt_var_n]=$((treefmt_var_node_level + 1))
+      treefmt_var_type_array[$treefmt_var_n]=$1
+      shift 1
+      treefmt_var_content_array[$treefmt_var_n]="$*"
+      ;;
+    branch)
+      case $2 in
+        create) ((treefmt_var_node_level++)) ;;
+        close) ((treefmt_var_node_level--)) ;;
+      esac
+      ;;
+    print)
+      treefmt_format
+      treefmt reset
+      ;;
+  esac
+}
+
 ls_instance() {
   local instance="$1"
   local shortname
@@ -837,37 +960,42 @@ ls_instance() {
 
   # Additional output
   if [[ -n "$OPT_LONGLIST" ]]; then
-    printf "   ├ %-17s %s\n" "Directory:" "$instance"
+    treefmt node "Directory" "$instance"
     if [[ -n "$normalized_shortname" ]]; then
-      printf "   ├ %-17s %s\n" "Stack name:" "$normalized_shortname"
+      treefmt node "Stack name" "$normalized_shortname"
     fi
-    printf "   ├ %-17s %s\n" "Local port:" "$port"
-    printf "   ├ %-17s\n" "Versions:"
-    for service in "${!service_versions[@]}"; do
-      printf "   │  ├ %-17s %s\n" "${service}:" \
-        "$(highlight_match "${service_versions[$service]}" "$FILTER_VERSION")"
-    done | sort
+    treefmt node "Local port" "$port"
+    treefmt node "Versions"
+    treefmt branch create
+    for service in $(printf "%s\n" "${!service_versions[@]}" | sort); do
+      treefmt node "${service}" "$(highlight_match "${service_versions[$service]}" "$FILTER_VERSION")"
+    done
+    treefmt branch close
   fi
 
   # --secrets
   if [[ -n "$OPT_SECRETS" ]]; then
-    printf "   ├ %-17s %s : %s\n" "Login:" "superadmin" "$OPENSLIDES_ADMIN_PASSWORD"
+    treefmt node "Secrets"
+    treefmt branch create
+    treefmt node "superadmin" "$OPENSLIDES_ADMIN_PASSWORD"
     # Include secondary account credentials if available
     [[ -n "$user_name" ]] &&
-      printf "   ├ %-17s \"%s\" : %s\n" \
-        "Login:" "$user_name" "$OPENSLIDES_USER_PASSWORD"
+      treefmt node "\"$user_name\"" "$OPENSLIDES_USER_PASSWORD"
     [[ -n "$OPENSLIDES_USER_EMAIL" ]] &&
-      printf "   ├ %-17s %s\n" "Contact:" "$OPENSLIDES_USER_EMAIL"
+      treefmt node "Contact" "$OPENSLIDES_USER_EMAIL"
+    treefmt branch close
   fi
 
   # --metadata
   if [[ ${#metadata[@]} -ge 1 ]]; then
-    printf "   └ %s\n" "Metadata:"
+    treefmt node "Metadata"
     for m in "${metadata[@]}"; do
       m=$(highlight_match "$m") # Colorize match in metadata
-      printf "     ┆ %s\n" "$m"
+      treefmt body "$m"
     done
   fi
+
+  treefmt print
 }
 
 colorize_ls() {
@@ -914,6 +1042,7 @@ list_instances() {
     find "${INSTANCES}" -mindepth 1 -maxdepth 1 -type d -print0 |
     sort -z
   )
+  treefmt init
   for instance in "${i[@]}"; do
     # skip directories that aren't instances
     [[ -f "${instance}/${DCCONFIG_FILENAME}" ]] && [[ -f "${instance}/config.yml" ]] || continue
