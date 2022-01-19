@@ -726,11 +726,12 @@ ls_instance() {
   if [[ -n "$OPT_LONGLIST" ]] || [[ -n "$OPT_JSON" ]]; then
     # Parse currently configured versions from docker-compose.yml
     declare -A service_versions
-    while read -r service version; do
-      service_versions[$service]=$version
+    while read -r service s_version; do
+      service_versions[$service]=$s_version
     done < <(yq eval '.services.*.image | {(path | join(".")): .}' \
         "${instance}/${DCCONFIG_FILENAME}" |
       gawk -F': ' '{ split($1, a, /\./); print a[2], $2}')
+    unset service s_version
     # Add management tool version to list of services.  This is not actually
     # a service running inside the stack but a version relevant to the stack
     # nonetheless.
@@ -786,7 +787,6 @@ ls_instance() {
       --arg "directory"     "$instance" \
       --arg "version"       "$version" \
       --arg "instance"      "$instance" \
-      --arg "version"       "$version" \
       --arg "status"        "$sym" \
       --arg "port"          "$port" \
       --arg "superadmin"    "$OPENSLIDES_ADMIN_PASSWORD" \
