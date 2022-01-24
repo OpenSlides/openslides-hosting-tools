@@ -24,12 +24,16 @@ MIN_WIDTH=64
 
 usage() {
 cat << EOF
-Usage: $ME [<options>] --tag <tag> < INSTANCES
+Usage: $ME [<options>] --tag=<tag> < <instances in JSON format>
 
   -t TAG, --tag=TAG   Docker image tag to which to update
   --at=TIME           "at" timespec, cf. \`man at\`
 
-$ME expects the output of "osinstancectl ls" on its standard input.
+$ME expects the output of "os4instancectl ls --json" on its standard input.
+
+Example:
+
+  os4instancectl --json ls staging | $ME --tag=4.0.0-new-version
 EOF
 }
 
@@ -106,10 +110,15 @@ done
 [[ -n "$TAG" ]] || { fatal "Missing option: --tag"; }
 
 # Read instance listing from os4instancectl on stdin
-while IFS= read -r line; do
-  # Skip irrelevant lines, probably from ls --long
-  grep -q '^[^\ ]' <<< "$line" || continue
-  read -r status instance version memo <<< "$line"
+JSON_DATA=$(jq .) || fatal "Input is not in JSON format."
+NUM_INSTANCES=$(jq '.instances | length' <<< "$JSON_DATA")
+
+until [[ ${n:=0} -eq $NUM_INSTANCES ]]; do
+  # Note: JSON array is zero-indexed while NUM_INSTANCES is the absolute number
+  # of objects.
+  instance=$(jq -r --argjson n "$n" '.instances[$n].name' <<< "$JSON_DATA")
+  version=$(jq -r --argjson n "$n" '.instances[$n].version' <<< "$JSON_DATA")
+  status=$(jq -r --argjson n "$n" '.instances[$n].status' <<< "$JSON_DATA")
   [[ -n "$status" ]] || continue
   # Pre-select instances
   checked="OFF"
@@ -134,6 +143,7 @@ while IFS= read -r line; do
   fmt="$(printf "%s (%s) %s\n" "$instance" "$version" "$checked")"
   [[ ${#fmt} -le "$MAX_LENGTH" ]] || MAX_LENGTH=${#fmt}
   INSTANCES+=("$fmt")
+  ((n++))
 done
 
 INSTANCES=($(instance_menu "$TAG" "${INSTANCES[@]}")) # User-selected instances
