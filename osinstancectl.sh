@@ -42,6 +42,7 @@ ACCOUNTS=
 AUTOSCALE_ACCOUNTS_OVER=
 AUTOSCALE_RESET_ACCOUNTS_OVER=
 OPT_LONGLIST=
+OPT_SERVICES=
 OPT_SECRETS=
 OPT_METADATA=
 OPT_METADATA_SEARCH=
@@ -125,10 +126,11 @@ Options:
                        auto.
 
   for ls:
-    -a, --all          Equivalent to -l -m -i
+    -a, --all          Equivalent to --long --secrets --metadata --services
     -l, --long         Include more information in extended listing format
     -s, --secrets      Include sensitive information such as login credentials
     -m, --metadata     Include metadata in instance list
+    --services         Include list of services in instance list
     -n, --online       Show only online instances
     -f, --offline      Show only stopped instances
     -e, --error        Show only running but unreachable instances
@@ -762,6 +764,7 @@ ls_instance() {
   local instance="$1"
   local shortname
   local normalized_shortname=
+  local ls_is_extended=
 
   shortname=$(basename "$instance")
 
@@ -850,7 +853,7 @@ ls_instance() {
   # Extended parsing
   # ----------------
   # --long
-  if [[ -n "$OPT_LONGLIST" ]] || [[ -n "$OPT_JSON" ]]; then
+  if [[ -n "$OPT_SERVICES" ]] || [[ -n "$OPT_JSON" ]]; then
     # Parse currently configured versions from docker-compose.yml
     declare -A service_versions
     while read -r service s_version; do
@@ -895,9 +898,8 @@ ls_instance() {
     fi
   fi
 
-  # Output
-  # ------
-  # JSON
+  # JSON ouput
+  # ----------
   if [[ -n "$OPT_JSON" ]]; then
     local jq_image_version_args=$(for s in ${!service_versions[@]}; do
       # v=$(echo "${service_versions[$s]}" | tr - _)
@@ -938,7 +940,7 @@ ls_instance() {
               user_email: \$user_email
             },
             metadata:   \$metadata,
-            versions: {
+            services: {
               # Iterate over all known services; their values get defined by jq
               # --arg options.
               $(for s in ${!service_versions[@]}; do
@@ -952,24 +954,24 @@ ls_instance() {
     return
   fi
 
-  # Basic output
-  if [[ -z "$OPT_LONGLIST" ]] && [[ -z "$OPT_METADATA" ]]
-  then
-    printf "%s %-30s\t%-10s\t%s\n" "$sym" "$shortname" \
-      "$(highlight_match "$version" "$FILTER_VERSION")" "$first_metadatum"
-  else
-    # Hide details if they are going to be included in the long output format
-    printf "%s %-30s\n" "$sym" "$shortname"
-  fi
+  # Prepare tree output
+  # -------------------
 
-  # Additional output
+  # --long
   if [[ -n "$OPT_LONGLIST" ]]; then
+    ls_is_extended=1
     treefmt node "Directory" "$instance"
     if [[ -n "$normalized_shortname" ]]; then
       treefmt node "Stack name" "$normalized_shortname"
     fi
     treefmt node "Local port" "$port"
-    treefmt node "Versions"
+    treefmt node "Version" "$version"
+  fi
+
+  # --services
+  if [[ -n "$OPT_SERVICES" ]]; then
+    ls_is_extended=1
+    treefmt node "Services"
     treefmt branch create
     for service in $(printf "%s\n" "${!service_versions[@]}" | sort); do
       treefmt node "${service}" "$(highlight_match "${service_versions[$service]}" "$FILTER_VERSION")"
@@ -979,6 +981,7 @@ ls_instance() {
 
   # --secrets
   if [[ -n "$OPT_SECRETS" ]]; then
+    ls_is_extended=1
     treefmt node "Secrets"
     treefmt branch create
     treefmt node "superadmin" "$OPENSLIDES_ADMIN_PASSWORD"
@@ -992,6 +995,7 @@ ls_instance() {
 
   # --metadata
   if [[ ${#metadata[@]} -ge 1 ]]; then
+    ls_is_extended=1
     treefmt node "Metadata"
     for m in "${metadata[@]}"; do
       m=$(highlight_match "$m") # Colorize match in metadata
@@ -999,6 +1003,17 @@ ls_instance() {
     done
   fi
 
+  # Print instance
+  # --------------
+  if [[ "$ls_is_extended" ]]; then
+    # Hide details if a long output format has been selected
+    printf "%s %-30s\n" "$sym" "$shortname"
+  else
+    # Print a single line per instance
+    printf "%s %-30s\t%-10s\t%s\n" "$sym" "$shortname" \
+      "$(highlight_match "$version" "$FILTER_VERSION")" "$first_metadatum"
+  fi
+  # Formatted tree
   treefmt print
 }
 
@@ -1470,11 +1485,15 @@ shortopt="halsjmiMnfed:t:O:"
 longopt=(
   help
   color:
-  long
-  secrets
   json
   project-dir:
   force
+
+  # display options
+  long
+  services
+  secrets
+  metadata
 
   # Template opions
   compose-template:
@@ -1485,7 +1504,6 @@ longopt=(
   online
   offline
   error
-  metadata
   fast
   patient
   search-metadata
@@ -1553,6 +1571,11 @@ while true; do
       OPT_METADATA=1
       OPT_IMAGE_INFO=1
       OPT_SECRETS=1
+      OPT_SERVICES=1
+      shift 1
+      ;;
+    --services)
+      OPT_SERVICES=1
       shift 1
       ;;
     -l|--long)
