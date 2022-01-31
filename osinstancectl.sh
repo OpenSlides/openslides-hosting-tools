@@ -781,6 +781,7 @@ ls_instance() {
 
   # Determine instance state
   local port
+  local instance_is_running=
   local sym="$SYM_UNKNOWN"
   local version=
   port="$(value_from_config_yml "$instance" '.port')"
@@ -791,6 +792,7 @@ ls_instance() {
     # If we can open a connection to the reverse proxy, the instance has been
     # deployed.
     sym="$SYM_NORMAL"
+    instance_is_running=1
     version="[skipped]"
     if [[ -z "$OPT_FAST" ]]; then
       instance_health_status "$port" || sym=$SYM_ERROR
@@ -801,6 +803,7 @@ ls_instance() {
     # stopped on purpose or there is a problem
     version=
     sym="$SYM_STOPPED"
+    instance_is_running=0
     if [[ -z "$OPT_FAST" ]] &&
         instance_has_services_running "$normalized_shortname"; then
       # The instance has been deployed but it is unreachable
@@ -852,7 +855,7 @@ ls_instance() {
 
   # Extended parsing
   # ----------------
-  # --long
+  # --services
   if [[ -n "$OPT_SERVICES" ]] || [[ -n "$OPT_JSON" ]]; then
     # Parse currently configured versions from docker-compose.yml
     declare -A service_versions
@@ -866,6 +869,20 @@ ls_instance() {
     # a service running inside the stack but a version relevant to the stack
     # nonetheless.
     service_versions[management-tool]=$(value_from_config_yml "$instance" '.managementToolHash') || true
+
+    # Get service scalings
+    if [[ "$instance_is_running" -eq 1 ]]; then
+      declare -A service_scaling
+      case "$DEPLOYMENT_MODE" in
+        "stack")
+          while read -r service s_scale; do
+            service_scaling[$service]=$s_scale
+          done < <(docker stack services --format '{{ .Name }} {{ .Replicas }}' "$normalized_shortname" |
+            gawk '{ sub(/^.+_/, "", $1); print } ')
+          ;;
+      esac
+      unset service s_scale
+    fi
   fi
 
   # --secrets
@@ -901,11 +918,15 @@ ls_instance() {
   # JSON ouput
   # ----------
   if [[ -n "$OPT_JSON" ]]; then
-    local jq_image_version_args=$(for s in ${!service_versions[@]}; do
-      # v=$(echo "${service_versions[$s]}" | tr - _)
+    local jq_image_version_args=$(for s in "${!service_versions[@]}"; do
       v=${service_versions[$s]}
       s=$(echo "$s" | tr - _)
       printf -- '--arg %s %s\n' "$s" "$v"
+    done)
+    local jq_service_scaling_args=$(for s in "${!service_scaling[@]}"; do
+      v=${service_scaling[$s]}
+      s=$(echo "$s" | tr - _)
+      printf -- '--arg %s_scale %s\n' "$s" "$v"
     done)
 
     # Purposefully not using $JQ here because the output may get piped into
@@ -924,6 +945,7 @@ ls_instance() {
       --arg "user_email"    "$OPENSLIDES_USER_EMAIL" \
       --arg "metadata"      "$(printf "%s\n" "${metadata[@]}")" \
       $jq_image_version_args \
+      $jq_service_scaling_args \
       "{
         instances: [
           {
@@ -941,12 +963,22 @@ ls_instance() {
             },
             metadata:   \$metadata,
             services: {
-              # Iterate over all known services; their values get defined by jq
-              # --arg options.
-              $(for s in ${!service_versions[@]}; do
-                printf '"%s": $%s,\n' $s ${s} |
-                tr - _ # dashes not allows in keys
-              done | sort)
+              versions: {
+                # Iterate over all known services; their values get defined by jq
+                # --arg options.
+                $(for s in ${!service_versions[@]}; do
+                  printf '"%s": $%s,\n' $s ${s} |
+                  tr - _ # dashes not allowed in keys
+                done | sort)
+              },
+              scaling: {
+                # Iterate over all known services; their values get defined by jq
+                # --arg options.
+                $(for s in ${!service_scaling[@]}; do
+                  printf '"%s": $%s_scale,\n' $s ${s} |
+                  tr - _ # dashes not allowed in keys
+                done | sort)
+              }
             }
           }
         ]
@@ -973,9 +1005,20 @@ ls_instance() {
     ls_is_extended=1
     treefmt node "Services"
     treefmt branch create
-    for service in $(printf "%s\n" "${!service_versions[@]}" | sort); do
-      treefmt node "${service}" "$(highlight_match "${service_versions[$service]}" "$FILTER_VERSION")"
-    done
+      treefmt node "Versions (configured)"
+        treefmt branch create
+          for service in $(printf "%s\n" "${!service_versions[@]}" | sort); do
+            treefmt node "${service}" "$(highlight_match "${service_versions[$service]}" "$FILTER_VERSION")"
+          done
+        treefmt branch close
+      if [[ "$instance_is_running" -eq 1 ]]; then
+        treefmt node "Scaling"
+          treefmt branch create
+            for service in $(printf "%s\n" "${!service_scaling[@]}" | sort); do
+              treefmt node "${service}" "${service_scaling[$service]}"
+            done
+          treefmt branch close
+      fi
     treefmt branch close
   fi
 
