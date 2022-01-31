@@ -85,7 +85,7 @@ if [[ "$JSON" ]]; then
       $JQ '.' <<< "$out" # simply print
     else
       # merge records from different sources
-      $JQ -s '{ instances: map(.instances[0]) }' <<< "$out"
+      $JQ -s '{ instances: map(.instances[]) }' <<< "$out"
     fi
 else
     exec clush -o "-ttq -o BatchMode=yes" -qS -b -w "${nodes:1}" \
