@@ -653,10 +653,18 @@ treefmt() {
     treefmt_indentation() {
       local higher_lvl=$((lvl - 1))
       if [[ ${treefmt_var_drawing_detail} -eq 1 ]]; then
-        for treefmt_var_node_level in $(seq 1 "$higher_lvl"); do
+        for node_level in $(seq 1 "$higher_lvl"); do
           local tree_drawing_char=$treefmt_var_default_tree_drawing_char
-          [[ ${treefmt_var_node_count_per_lvl[$treefmt_var_node_level]:-0} -eq 0 ]] ||
+          # Draw branch if there will be more nodes of the same level
+          if [[ ${treefmt_var_node_count_per_lvl[$node_level]:-0} -gt 0 ]]; then
             tree_drawing_char="│"
+          fi
+          # But do not draw the branch if the parent node was the last of this
+          # particular branch, i.e., is listed as a breaking node
+          if echo "${treefmt_var_breaking_nodes[$node_level]:-}" |
+              grep -qw "${last_node_in_lvl[$node_level]}"; then
+            tree_drawing_char=$treefmt_var_default_tree_drawing_char
+          fi
           printf "%s%s%${treefmt_var_padding}s" \
             "$indent" "$tree_drawing_char" "$treefmt_var_default_tree_paddding_char"
         done
@@ -678,12 +686,19 @@ treefmt() {
             if [[ ${treefmt_var_drawing_detail} -eq 1 ]]; then
               local next_node=$((i+1))
               local next_node_level
+              local last_node_in_lvl[$lvl]=$i
               next_node_level=${treefmt_var_level_array[$next_node]:-0}
               treefmt_var_node_count_per_lvl[$lvl]=$((treefmt_var_node_count_per_lvl[$lvl] - 1))
               if [[ "$next_node_level" -lt "$lvl" ]]; then
                 # if the next node is of a higher level, this node must be;
                 # closed.  any other nodes of the same level must be part of
                 # a new subtree.
+                drawing_char=$treefmt_var_draw_close
+              elif echo "${treefmt_var_breaking_nodes[$lvl]:-}" | grep -qw "$i" ; then
+                # if the current node has been recorded as the last node of
+                # a certain level before a break.  This means there may be more
+                # nodes of this level but the tree is broken up by higher-level
+                # nodes in between.
                 drawing_char=$treefmt_var_draw_close
               elif [[ "${treefmt_var_node_count_per_lvl[$lvl]}" -ge 1 ]]; then
                 # if there are more nodes of the same level, draw continuation character
@@ -721,6 +736,8 @@ treefmt() {
       treefmt_var_node_level=1
       treefmt_var_max_lvl=$treefmt_var_node_level
       treefmt_var_max_align=0
+      declare -A treefmt_var_last_node_per_lvl=()
+      declare -A treefmt_var_breaking_nodes=()
       ;;
     node)
       [[ -n $2 ]] || fatal "ProgrammingError: treefmt node name must not be empty"
@@ -729,7 +746,9 @@ treefmt() {
       treefmt_var_node_count_per_lvl[$treefmt_var_node_level]=$((
         treefmt_var_node_count_per_lvl[$treefmt_var_node_level] + 1
       ))
-      [[ $treefmt_var_node_level -lt $treefmt_var_max_lvl ]] || treefmt_var_max_lvl=$treefmt_var_node_level
+      [[ $treefmt_var_node_level -lt $treefmt_var_max_lvl ]] ||
+        treefmt_var_max_lvl=$treefmt_var_node_level
+      treefmt_var_last_node_per_lvl[$treefmt_var_node_level]=$treefmt_var_n
       treefmt_var_type_array[$treefmt_var_n]=$1
       header_array[$treefmt_var_n]=$2
       # record longest node header
@@ -750,7 +769,12 @@ treefmt() {
     branch)
       case $2 in
         create) ((treefmt_var_node_level++)) ;;
-        close) ((treefmt_var_node_level--)) ;;
+        close)
+          # Strings containing all nodes of a given level that are the last in
+          # their (sub)branch
+          treefmt_var_breaking_nodes[$treefmt_var_node_level]+="${treefmt_var_last_node_per_lvl[$treefmt_var_node_level]} "
+          ((treefmt_var_node_level--))
+          ;;
       esac
       ;;
     print)
