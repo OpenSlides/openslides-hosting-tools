@@ -359,8 +359,9 @@ recreate_compose_yml() {
 }
 
 openslides_connect_opts() {
-  local port=$(value_from_config_yml "$PROJECT_DIR" '.port')
-  local secret="$PROJECT_DIR/secrets/manage_auth_password"
+  local dir=${1-$PROJECT_DIR}
+  local port=$(value_from_config_yml "$dir" '.port')
+  local secret="${dir}/secrets/manage_auth_password"
   echo "-a 127.0.0.1:${port} --password-file $secret --no-ssl"
 }
 
@@ -1205,7 +1206,7 @@ instance_setup_initialdata() {
   while :; do
     echo "Waiting for datastore to load initial data."
     {
-      "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts)
+      "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts "$PROJECT_DIR")
       ec=$?
     } || :
     # Check initial-data success
@@ -1224,7 +1225,7 @@ instance_setup_user() {
   # created, the file is renamed.
   local secret="${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
   if [[ -r "${secret}.setup" ]]; then
-    "${MANAGEMENT_TOOL}" create-user $(openslides_connect_opts) \
+    "${MANAGEMENT_TOOL}" create-user $(openslides_connect_opts "$PROJECT_DIR") \
       -f "${secret}.setup"
     mv "${secret}.setup" "$secret"
   fi
