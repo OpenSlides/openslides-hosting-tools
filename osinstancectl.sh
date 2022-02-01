@@ -710,11 +710,18 @@ treefmt() {
               drawing_char=$treefmt_var_draw_cont
               indent="${treefmt_var_base_indent}$(treefmt_indentation)"
             fi
+            # If the node has a value, add a colon to the node key/header
+            # local colon=
+            if [[ -n "${treefmt_var_content_array[$i]}" ]]; then
+              colon=:
+            else
+              colon=
+            fi
             printf "%s%s%s%-${align}s %s\n" \
               "$indent" \
               "$drawing_char" \
               "$treefmt_var_default_tree_paddding_char" \
-              "${header_array[$i]}:" \
+              "${header_array[$i]}${colon}" \
               "${treefmt_var_content_array[$i]}"
             ;;
           body)
