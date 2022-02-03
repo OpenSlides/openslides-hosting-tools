@@ -903,7 +903,7 @@ ls_instance() {
     service_versions[management-tool]=$(value_from_config_yml "$instance" '.managementToolHash') || true
 
     # Get service scalings
-    if [[ "$instance_is_running" -eq 1 ]]; then
+    if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
       declare -A service_scaling
       case "$DEPLOYMENT_MODE" in
         "stack")
@@ -1043,7 +1043,7 @@ ls_instance() {
             treefmt node "${service}" "$(highlight_match "${service_versions[$service]}" "$FILTER_VERSION")"
           done
         treefmt branch close
-      if [[ "$instance_is_running" -eq 1 ]]; then
+      if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
         treefmt node "Scaling"
           treefmt branch create
             for service in $(printf "%s\n" "${!service_scaling[@]}" | sort); do
