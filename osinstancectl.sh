@@ -43,6 +43,7 @@ OPT_PIDFILE=1
 OPT_LONGLIST=
 OPT_SERVICES=
 OPT_SECRETS=
+OPT_STATS=
 OPT_METADATA=
 OPT_METADATA_SEARCH=
 OPT_JSON=
@@ -140,6 +141,8 @@ Options:
     -s, --secrets      Include sensitive information such as login credentials
     -m, --metadata     Include metadata in instance list
     --services         Include list of services in instance list
+    --stats            Include addtional information from running instances,
+                       e.g., meetings details
     -n, --online       Show only online instances
     -f, --offline      Show only stopped instances
     -e, --error        Show only running but unreachable instances
@@ -186,13 +189,17 @@ The ls output:
     gray               The instance has been stopped
 
   Version information in ls mode:
-
     The listed version is the containers' Docker image tag currently in use.
     Normally, this is a single tag.  In case there is more than one tag in use,
     the display format is extended to include more detail.  It lists each tag
     with the number of containers running this tag, separated by slashes, as
     well as a final sum of the number of different registries and tags in
     square brackets, e.g., "[1:2]".
+
+  Stats in ls mode:
+    - Meetings:         active/max. number of meetings
+    - List of meetings: ID, name, dates, Jitsi configuration of each meeting
+    - Users:            active/total/max. number of users
 EOF
 }
 
@@ -333,8 +340,6 @@ select_management_tool() {
     else
       MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${MANAGEMENT_TOOL_HASH}"
     fi
-  else # Fall back to default
-    MANAGEMENT_TOOL="${MANAGEMENT_TOOL}"
   fi
   MANAGEMENT_TOOL_HASH=$(hash_management_tool)
   if [[ -x "$MANAGEMENT_TOOL" ]]; then
@@ -839,7 +844,8 @@ treefmt() {
         close)
           # Strings containing all nodes of a given level that are the last in
           # their (sub)branch
-          treefmt_var_breaking_nodes[$treefmt_var_node_level]+="${treefmt_var_last_node_per_lvl[$treefmt_var_node_level]} "
+          [[ -z ${treefmt_var_last_node_per_lvl[$treefmt_var_node_level]:-} ]] ||
+            treefmt_var_breaking_nodes[$treefmt_var_node_level]+="${treefmt_var_last_node_per_lvl[$treefmt_var_node_level]} "
           ((treefmt_var_node_level--))
           ;;
       esac
@@ -997,6 +1003,65 @@ ls_instance() {
     fi
   fi
 
+  # --stats
+  if [[ "$instance_is_running" -eq 1 ]]; then
+    mngmt_cmd=("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance"))
+    if [[ -n "$OPT_STATS" ]] || [[ -n "$OPT_JSON" ]]; then
+      #
+      # Organization
+      IFS=$'\t' read -r \
+          stats_limit_of_users \
+          stats_limit_of_meetings \
+          stats_active_meetings \
+          stats_feature_evoting \
+          stats_feature_chat \
+        < <("${mngmt_cmd[@]}" organization | jq -r '
+            .[] | [
+              .limit_of_users,
+              .limit_of_meetings,
+              (.active_meeting_ids | length),
+              .enable_electronic_voting,
+              .enable_chat
+            ] | @tsv')
+      # Create array of enabled features for later output formatting
+      [[ "${stats_feature_chat:-false}" = false ]] || features_enabled+=(chat)
+      [[ "${stats_feature_evoting:-false}" = false ]] || features_enabled+=(evoting)
+      #
+      # User
+      stats_total_users=$("${mngmt_cmd[@]}" user --fields id | jq -r '. | length')
+      stats_active_users=$("${mngmt_cmd[@]}" user --fields id --filter=is_active=true  | jq -r '. | length')
+      #
+      # Meetings
+      declare -A stat_meeting_name=()
+      declare -A stat_meeting_dates=()
+      declare -A stat_meeting_jitsi=()
+      while IFS=$'\t' read -r \
+        id \
+        name \
+        start \
+        end \
+        jitsi_domain \
+        jitsi_room_name \
+        jitsi_room_password
+      do
+        stat_meeting_name[$id]=$name
+        if [[ "$start" -gt 0 ]] && [[ "$end" -gt 0 ]]; then
+          stat_meeting_dates[$id]="$(date -I -d "@$start") – $(date -I -d "@$end")"
+        fi
+        if [[ -n "${jitsi_domain}" ]] && [[ -n "${jitsi_room_name}" ]]; then
+          printf -v stat_meeting_jitsi[$id] "%s/%s" "${jitsi_domain}" "${jitsi_room_name}"
+          [[ -z "${jitsi_room_password}" ]] || stat_meeting_jitsi[$id]+=" (${jitsi_room_password})"
+        fi
+      done < <("${mngmt_cmd[@]}" meeting \
+        --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
+        jq -cr '.[] | flatten | @tsv')
+      # Meeting info in JSON format for --json
+      stats_meetings_json=$("${mngmt_cmd[@]}" meeting \
+        --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
+        jq '{ meetings: [.[]] }')
+    fi
+  fi
+
   # JSON ouput
   # ----------
   if [[ -n "$OPT_JSON" ]]; then
@@ -1022,37 +1087,52 @@ ls_instance() {
       fi
     )
 
-    # Purposefully not using $JQ here because the output may get piped into
-    # another jq process
-    jq -n \
-      --arg "shortname"     "$shortname" \
-      --arg "stackname"     "$normalized_shortname" \
-      --arg "directory"     "$instance" \
-      --arg "version"       "$version" \
-      --arg "instance"      "$instance" \
-      --arg "status"        "$sym" \
-      --arg "port"          "$port" \
-      --arg "superadmin"    "$OPENSLIDES_ADMIN_PASSWORD" \
-      --arg "user_name"     "$user_name" \
-      --arg "user_password" "$OPENSLIDES_USER_PASSWORD" \
-      --arg "user_email"    "$OPENSLIDES_USER_EMAIL" \
-      --arg "metadata"      "$(printf "%s\n" "${metadata[@]}")" \
-      $jq_image_version_args \
-      $jq_service_scaling_args \
-      "{
-        instances: [
-          {
-            name:       \$shortname,
-            stackname:  \$stackname,
-            directory:  \$instance,
-            version:    \$version,
-            status:     \$status,
-            port:       \$port,
-            superadmin: \$superadmin,
-            user: {
-              user_name:    \$user_name,
-              user_password: \$user_password,
-              user_email: \$user_email
+    # Create a custom JSON object and merge it with the meetings information
+    {
+      jq -n \
+        --arg     "shortname"       "$shortname"                        \
+        --arg     "stackname"       "$normalized_shortname"             \
+        --arg     "directory"       "$instance"                         \
+        --arg     "version"         "$version"                          \
+        --arg     "instance"        "$instance"                         \
+        --arg     "status"          "$sym"                              \
+        --argjson "port"            "$port"                             \
+        --arg     "superadmin"      "$OPENSLIDES_ADMIN_PASSWORD"        \
+        --arg     "user_name"       "$user_name"                        \
+        --arg     "user_password"   "$OPENSLIDES_USER_PASSWORD"         \
+        --arg     "user_email"      "$OPENSLIDES_USER_EMAIL"            \
+        --argjson "meetings_active" "${stats_active_meetings:-null}"    \
+        --argjson "meetings_limit"  "${stats_limit_of_meetings:-null}"  \
+        --argjson "active_users"    "${stats_active_users:-null}"       \
+        --argjson "total_users"     "${stats_total_users:-null}"        \
+        --argjson "limit_users"     "${stats_limit_of_users:-null}"     \
+        --argjson "feature_chat"    "${stats_feature_chat:-null}"       \
+        --argjson "feature_evoting" "${stats_feature_evoting:-null}"    \
+        --arg     "metadata"        "$(printf "%s\n" "${metadata[@]}")" \
+        $jq_image_version_args \
+        $jq_service_scaling_args \
+        "{
+          name:       \$shortname,
+          stackname:  \$stackname,
+          directory:  \$instance,
+          version:    \$version,
+          status:     \$status,
+          port:       \$port,
+          superadmin: \$superadmin,
+          user: {
+            user_name:    \$user_name,
+            user_password: \$user_password,
+            user_email: \$user_email
+          },
+          metadata:   \$metadata,
+          services: {
+            versions: {
+              # Iterate over all known services; their values get defined by jq
+              # --arg options.
+              $(for s in ${!service_versions[@]}; do
+                printf '"%s": $%s,\n' $s ${s} |
+                tr - _ # dashes not allowed in keys
+              done | sort)
             },
             metadata:   \$metadata,
             services: {
@@ -1090,9 +1170,21 @@ ls_instance() {
                 )
               }
             }
+          },
+          stats: {
+            meetings_active: \$meetings_active,
+            meetings_limit: \$meetings_limit,
+            users_active: \$active_users,
+            users_total: \$total_users,
+            users_limit: \$limit_users,
+            feature_chat: \$feature_chat,
+            feature_evoting: \$feature_evoting
           }
-        ]
-      }"
+        }"
+      # List of meetings
+      echo "${stats_meetings_json:-}"
+    } |
+      jq -s '.[0] + .[1]' # merge into a single object
     return
   fi
 
@@ -1154,6 +1246,36 @@ ls_instance() {
       treefmt node "\"$user_name\"" "$OPENSLIDES_USER_PASSWORD"
     [[ -n "$OPENSLIDES_USER_EMAIL" ]] &&
       treefmt node "Contact" "$OPENSLIDES_USER_EMAIL"
+    treefmt branch close
+  fi
+
+  # --stats
+  if [[ -n "$OPT_STATS" ]]; then
+    ls_is_extended=1
+  fi
+  if [[ -n "$OPT_STATS" ]] && [[ "$instance_is_running" -eq 1 ]]; then
+    local this_meeting_name
+    local meeting_node_header
+    local meeting_node_body
+    treefmt node "Stats"
+      treefmt branch create
+      treefmt node "Meetings" "${stats_active_meetings:-}/${stats_limit_of_meetings:-}"
+        treefmt branch create
+        # Iterate over sorted array keys
+        for i in $(printf "%s\n" "${!stat_meeting_name[@]}" | sort -n); do
+          this_meeting_name="${stat_meeting_name[$i]}"
+          # Abbreviate long meeting titles
+          [[ "${#this_meeting_name}" -le 15 ]] || this_meeting_name="${this_meeting_name:0:15}."
+          printf -v meeting_node_header "%02d: %s" $i "${this_meeting_name}"
+          meeting_node_body="${stat_meeting_dates[$i]:-}"
+          if [[ -n "${stat_meeting_jitsi[$i]:-}" ]]; then
+            meeting_node_body="${meeting_node_body} / ${stat_meeting_jitsi[$i]:-}"
+          fi
+          treefmt node "$meeting_node_header" "${meeting_node_body}"
+        done
+        treefmt branch close
+      treefmt node "Users" "${stats_active_users:-}/${stats_total_users:-}/${stats_limit_of_users:-}"
+      treefmt node "Features" "${features_enabled[*]:-"—"}"
     treefmt branch close
   fi
 
@@ -1247,7 +1369,7 @@ list_instances() {
 
   merge_if_json() {
     if [[ -n "$OPT_JSON" ]]; then
-      $JQ -s '{ instances: map(.instances[0]) }'
+      $JQ -s '{ instances: . }'
     else
       cat -
     fi
@@ -1633,6 +1755,7 @@ longopt=(
   services
   secrets
   metadata
+  stats
 
   # Template opions
   compose-template:
@@ -1713,10 +1836,15 @@ while true; do
       OPT_IMAGE_INFO=1
       OPT_SECRETS=1
       OPT_SERVICES=1
+      OPT_STATS=1
       shift 1
       ;;
     --services)
       OPT_SERVICES=1
+      shift 1
+      ;;
+    --stats)
+      OPT_STATS=1
       shift 1
       ;;
     -l|--long)
