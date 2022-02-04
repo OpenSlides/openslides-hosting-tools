@@ -1247,8 +1247,10 @@ instance_start() {
       docker stack deploy -c "$DCCONFIG" "$PROJECT_STACK_NAME"
       ;;
   esac
-  instance_setup_initialdata
-  instance_setup_user
+  [[ "$MODE" == "update" ]] || {
+    instance_setup_initialdata
+    instance_setup_user
+  }
 }
 
 instance_stop() {
