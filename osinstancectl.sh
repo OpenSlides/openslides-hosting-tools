@@ -490,7 +490,7 @@ default_password: "$PW"
 is_active: true
 organization_management_level: can_manage_organization
 committee__management_level:
-  1: can_manage
+  can_manage: [1]
 group__ids:
   1: [1, 2]
 EOF
