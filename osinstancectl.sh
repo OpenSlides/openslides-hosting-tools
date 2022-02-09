@@ -30,7 +30,7 @@ OS3_INSTANCES="/srv/openslides/docker-instances"
 
 ME=$(basename -s .sh "${BASH_SOURCE[0]}")
 CONFIG="/etc/os4instancectl"
-PIDFILE="/tmp/os4instancectl.pid"
+PIDFILE="/tmp/osinstancectl.pid"
 MARKER=".osinstancectl-marker"
 PROJECT_NAME=
 PROJECT_DIR=
