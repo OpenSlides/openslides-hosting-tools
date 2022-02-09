@@ -28,6 +28,7 @@ HOOKS_DIR=
 
 ME=$(basename -s .sh "${BASH_SOURCE[0]}")
 CONFIG="/etc/osinstancectl"
+PIDFILE="/tmp/osinstancectl.pid"
 MARKER=".osinstancectl-marker"
 PRIMARY_DATABASE_NODE="pgnode1"
 PROJECT_NAME=
@@ -188,6 +189,44 @@ EOF
 fatal() {
     echo 1>&2 "${COL_RED}ERROR${COL_NORMAL}: $*"
     exit 23
+}
+
+warn() {
+    echo 1>&2 "${COL_RED}WARN${COL_NORMAL}: $*"
+}
+
+clean_up() {
+  # Clean up the PID file (only if it is this process' own PID file)
+  local pid logname email
+  if [[ -f "$PIDFILE" ]] && read -r pid logname email < "$PIDFILE" && [[ $pid -eq $$ ]]
+  then
+    # Truncate file; should always work (has mode 666)
+    >| "$PIDFILE"
+    # Delete file; may fail if it is a stale file created by another user
+    rm -f "$PIDFILE" >/dev/null 2>&1 || true
+  fi
+}
+
+create_and_check_pid_file() {
+  # Create PID file in /tmp/, so all users may create them without requiring
+  # any additional measures, e.g., for /var/run/.  The sticky bit commonly set
+  # on /tmp/ requires the PID file mechanism to handle circumstances in which
+  # even a stale file can not be removed.
+  local pid logname email by
+  if [[ -f "$PIDFILE" ]] && read -r pid logname email < "$PIDFILE"; then
+    by=$logname
+    [[ -z "$email" ]] || by="${logname} [${email}]"
+    if ps p "$pid" >/dev/null 2>&1; then
+      fatal "$ME is already being executed by ${by} (PID: ${pid}, PID file: ${PIDFILE})"
+    else
+      warn "Stale PID file detected."
+    fi
+  else
+    # Create the file and allow other users to update it
+    touch "$PIDFILE"
+    chmod 666 "$PIDFILE"
+  fi
+  echo "$$ ${LOGNAME:-"unknown"} ${EMAIL:-}" >| "$PIDFILE"
 }
 
 check_config_compatibility() {
@@ -1457,6 +1496,7 @@ run_hook() (
   fi
   )
 
+trap clean_up EXIT
 
 # Decide mode from invocation
 case "$(basename "${BASH_SOURCE[0]}")" in
@@ -1831,6 +1871,7 @@ DOT_ENV_TEMPLATE="${DOT_ENV_TEMPLATE:-${DEFAULT_DOT_ENV_TEMPLATE}}"
 
 case "$MODE" in
   remove)
+    create_and_check_pid_file
     arg_check || { usage; exit 2; }
     [[ -n "$OPT_FORCE" ]] || marker_check
     # Ask for confirmation
@@ -1845,6 +1886,7 @@ case "$MODE" in
     remove "$PROJECT_NAME"
     ;;
   create)
+    create_and_check_pid_file
     [[ -f "$CONFIG" ]] && echo "Applying options from ${CONFIG}." || true
     arg_check || { usage; exit 2; }
     check_config_compatibility
@@ -1877,6 +1919,7 @@ case "$MODE" in
     ask_start
     ;;
   clone)
+    create_and_check_pid_file
     CLONE_FROM_DIR="${INSTANCES}/${CLONE_FROM}"
     arg_check || { usage; exit 2; }
     echo "Creating new instance: $PROJECT_NAME (based on $CLONE_FROM)"
@@ -1931,16 +1974,19 @@ case "$MODE" in
     list_instances
     ;;
   start)
+    create_and_check_pid_file
     arg_check || { usage; exit 2; }
     instance_start
     run_hook "post-${MODE}"
     ;;
   stop)
+    create_and_check_pid_file
     arg_check || { usage; exit 2; }
     instance_stop
     run_hook "post-${MODE}"
     ;;
   erase)
+    create_and_check_pid_file
     arg_check || { usage; exit 2; }
     # Ask for confirmation
     ANS=
@@ -1954,12 +2000,14 @@ case "$MODE" in
     instance_erase
     ;;
   update)
+    create_and_check_pid_file
     [[ -f "$CONFIG" ]] && echo "Applying options from ${CONFIG}." || true
     arg_check || { usage; exit 2; }
     instance_update
     run_hook "post-${MODE}"
     ;;
   autoscale)
+    create_and_check_pid_file
     [[ -f "$CONFIG" ]] && echo "Applying options from ${CONFIG}." || true
     arg_check || { usage; exit 2; }
     instance_autoscale
