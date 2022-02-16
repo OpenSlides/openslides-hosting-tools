@@ -42,6 +42,7 @@ DOCKER_IMAGE_TAG_OPENSLIDES=
 ACCOUNTS=
 AUTOSCALE_ACCOUNTS_OVER=
 AUTOSCALE_RESET_ACCOUNTS_OVER=
+OPT_PIDFILE=1
 OPT_LONGLIST=
 OPT_SERVICES=
 OPT_SECRETS=
@@ -221,16 +222,32 @@ create_and_check_pid_file() {
   # any additional measures, e.g., for /var/run/.  The sticky bit commonly set
   # on /tmp/ requires the PID file mechanism to handle circumstances in which
   # even a stale file can not be removed.
-  local pid logname email by
-  if [[ -f "$PIDFILE" ]] && read -r pid logname email < "$PIDFILE"; then
+  local pid logname email by message
+  [[ -f "$PIDFILE" ]] && read -r pid logname email < "$PIDFILE"
+  exists="$?"
+  if [[ "$exists" == 0 ]]; then
     by=$logname
     [[ -z "$email" ]] || by="${logname} [${email}]"
+    message="$ME is already being executed by ${by} (PID: ${pid}, PID file: ${PIDFILE})"
     if ps p "$pid" >/dev/null 2>&1; then
-      fatal "$ME is already being executed by ${by} (PID: ${pid}, PID file: ${PIDFILE})"
+      if [[ -n "$OPT_PIDFILE" ]]; then
+        fatal "$message"
+      else
+        warn "$message"
+        warn "continuing anyways (--no-pid-file)"
+      fi
     else
       warn "Stale PID file detected."
+      if [[ -n "$OPT_PIDFILE" ]]; then
+        warn "overwriting"
+      else
+        warn "ignoring (--no-pid-file)"
+      fi
     fi
-  else
+  fi
+  [[ -n "$OPT_PIDFILE" ]] ||
+    return 0
+  if [[ "$exists" != 0 ]]; then
     # Create the file and allow other users to update it
     touch "$PIDFILE"
     chmod 666 "$PIDFILE"
@@ -1602,6 +1619,7 @@ longopt=(
   json
   project-dir:
   force
+  no-pid-file
 
   # display options
   long
@@ -1654,6 +1672,10 @@ fi
 # Parse options
 while true; do
   case "$1" in
+    --no-pid-file)
+      OPT_PIDFILE=
+      shift 1
+      ;;
     -d|--project-dir)
       PROJECT_DIR="$2"
       shift 2

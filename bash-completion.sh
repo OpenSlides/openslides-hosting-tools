@@ -5,7 +5,7 @@ _os4instancectl()
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
   opts="ls add rm start stop update erase autoscale"
-  opts+=" --help --long --metadata --online --offline --error"
+  opts+=" --help --long --metadata --online --offline --error --no-pid-file"
   opts+=" --clone-from --force --color --project-dir --fast --patient"
   opts+=" --local-only"
   opts+=" --version --tag --management-tool"
