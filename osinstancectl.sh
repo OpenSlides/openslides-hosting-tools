@@ -530,6 +530,9 @@ create_instance_dir() {
   chmod -R 600 "${PROJECT_DIR}/secrets/"
   chmod 700 "${PROJECT_DIR}/secrets"
 
+  # create setup directory for payload files used by `openslides set`
+  mkdir "${PROJECT_DIR}/setup/"
+
   # Note which version of the openslides tool is compatible with the instance,
   # unless special string "-" is given
   if [[ "$OPT_MANAGEMENT_TOOL" = '-' ]]; then
@@ -1290,6 +1293,18 @@ instance_setup_user() {
   fi
 }
 
+instance_setup_organization() {
+  # Set fields of organization if the setup file exists. After the organization
+  # has been updated, the file is renamed.
+  local file="${PROJECT_DIR}/setup/organization.yml"
+  if [[ -r "${file}.setup" ]]; then
+    # XXX: The syntax of `openslides set` might change in the future
+    "${MANAGEMENT_TOOL}" set $(openslides_connect_opts "$PROJECT_DIR") organization \
+      "${file}.setup"
+    mv "${file}.setup" "$file"
+  fi
+}
+
 instance_start() {
   # Re-generate docker-compose.yml/docker-stack.yml
   recreate_compose_yml
@@ -1301,6 +1316,7 @@ instance_start() {
   esac
   [[ "$MODE" == "update" ]] || {
     instance_setup_initialdata
+    instance_setup_organization
     instance_setup_user
   }
 }
@@ -1967,14 +1983,14 @@ case "$MODE" in
     add_to_haproxy_cfg
     run_hook "post-${MODE}"
     # read accounts for autoscale
-    if [[ -f "${PROJECT_DIR}/metadata.txt" ]]; then
-      ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
-      if [[ -n "$ACCOUNTS" ]]; then
-        # initially set to non-power mode (= --reset)
-        OPT_RESET=1
-        instance_autoscale
-      fi
-    fi
+    #if [[ -f "${PROJECT_DIR}/metadata.txt" ]]; then
+    #  ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
+    #  if [[ -n "$ACCOUNTS" ]]; then
+    #    # initially set to non-power mode (= --reset)
+    #    OPT_RESET=1
+    #    instance_autoscale
+    #  fi
+    #fi
     ask_start || true
     ;;
   clone)
