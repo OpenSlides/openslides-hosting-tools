@@ -10,7 +10,7 @@ _os4instancectl()
   opts+=" --local-only"
   opts+=" --version --tag --management-tool"
   opts+=" --compose-template --config-template"
-  opts+=" --reset --allow-downscale --accounts --dry-run"
+  opts+=" --accounts --dry-run"
   diropts="ls|rm|start|stop|update|erase|autoscale|--clone-from"
 
   if [[ ${prev} =~ ${diropts} ]]; then

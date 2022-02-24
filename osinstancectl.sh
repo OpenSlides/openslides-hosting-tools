@@ -39,9 +39,6 @@ PORT=
 DEPLOYMENT_MODE=
 MODE=
 DOCKER_IMAGE_TAG_OPENSLIDES=
-ACCOUNTS=
-AUTOSCALE_ACCOUNTS_OVER=
-AUTOSCALE_RESET_ACCOUNTS_OVER=
 OPT_PIDFILE=1
 OPT_LONGLIST=
 OPT_SERVICES=
@@ -52,8 +49,6 @@ OPT_JSON=
 OPT_ADD_ACCOUNT=1
 OPT_LOCALONLY=
 OPT_FORCE=
-OPT_ALLOW_DOWNSCALE=
-OPT_RESET=
 OPT_DRY_RUN=
 OPT_FAST=
 OPT_PATIENT=
@@ -71,6 +66,16 @@ OPENSLIDES_USER_EMAIL=
 OPENSLIDES_USER_PASSWORD=
 OPT_PRECISE_PROJECT_NAME=
 CURL_OPTS=(--max-time 1 --retry 2 --retry-delay 1 --retry-max-time 3)
+
+# Scale related
+declare -A SCALE_FROM=()
+declare -A SCALE_TO=()
+declare -A SCALE_RUNNING=()
+MEETINGS_TODAY=
+ACCOUNTS_TODAY=
+ACCOUNTS=
+AUTOSCALE_ACCOUNTS_OVER=
+AUTOSCALE_RESET_ACCOUNTS_OVER=
 
 # Color and formatting settings
 OPT_COLOR=auto
@@ -116,7 +121,9 @@ Actions:
   erase                Execute the mid-erase hook without otherwise removing
                        the instance.
   autoscale            Scale relevant services of an instance based on it's
-                       ACCOUNTS metadatum (adjust values in CONFIG file)
+                       meetings dates and users. Will only scale down if there
+                       no meeting scheduled for today.
+                       (adjust values in CONFIG file)
 
 Options:
   -d,
@@ -163,9 +170,6 @@ Options:
                        instance
 
   for autoscale:
-    --allow-downscale  Without this option services will only be scaled upward to
-                       to prevent possibly undoing manual scaling adjusmtents
-    --reset            Reset all scaling back to normal
     --accounts=NUM     Specify the number of acoounts to scale for overriding
                        read from metadata.txt
     --dry-run          Print out actions instead of actually performing them
@@ -959,16 +963,7 @@ ls_instance() {
 
     # Get service scalings
     if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
-      declare -A service_scaling
-      case "$DEPLOYMENT_MODE" in
-        "stack")
-          while read -r service s_scale; do
-            service_scaling[$service]=$s_scale
-          done < <(docker stack services --format '{{ .Name }} {{ .Replicas }}' "$normalized_shortname" |
-            gawk '{ sub(/^.+_/, "", $1); print } ')
-          ;;
-      esac
-      unset service s_scale
+      autoscale_gather "$instance" || true
     fi
   fi
 
@@ -1005,16 +1000,27 @@ ls_instance() {
   # JSON ouput
   # ----------
   if [[ -n "$OPT_JSON" ]]; then
-    local jq_image_version_args=$(for s in "${!service_versions[@]}"; do
-      v=${service_versions[$s]}
-      s=$(echo "$s" | tr - _)
-      printf -- '--arg %s %s\n' "$s" "$v"
-    done)
-    local jq_service_scaling_args=$(for s in "${!service_scaling[@]}"; do
-      v=${service_scaling[$s]}
-      s=$(echo "$s" | tr - _)
-      printf -- '--arg %s_scale %s\n' "$s" "$v"
-    done)
+    local jq_image_version_args=$(
+      for s in "${!service_versions[@]}"; do
+        v=${service_versions[$s]}
+        s=$(echo "$s" | tr - _)
+        printf -- '--arg %s %s\n' "$s" "$v"
+      done
+    )
+    local jq_service_scaling_args=$(
+      if [[ "$instance_is_running" -eq 1 ]];then
+        for s in "${!SCALE_RUNNING[@]}"; do
+          v_current=${SCALE_RUNNING[$s]}
+          v_target=${SCALE_TO[$s]}
+          s=$(echo "$s" | tr - _)
+          printf -- '--arg %s_scale_current %s\n' "$s" "$v_current"
+          printf -- '--arg %s_scale_target %s\n' "$s" "$v_target"
+        done
+        printf -- '--arg misc_today %s\n' "$(date +%F)"
+        printf -- '--arg misc_meetings_today %s\n' "$MEETINGS_TODAY"
+        printf -- '--arg misc_accounts_today %s\n' "$ACCOUNTS_TODAY"
+      fi
+    )
 
     # Purposefully not using $JQ here because the output may get piped into
     # another jq process
@@ -1059,12 +1065,29 @@ ls_instance() {
                 done | sort)
               },
               scaling: {
-                # Iterate over all known services; their values get defined by jq
-                # --arg options.
-                $(for s in ${!service_scaling[@]}; do
-                  printf '"%s": $%s_scale,\n' $s ${s} |
-                  tr - _ # dashes not allowed in keys
-                done | sort)
+                $(
+                if [[ "$instance_is_running" -eq 1 ]]; then
+                  # Iterate over all known services; their values get defined by jq
+                  # --arg options.
+                  printf "misc: {
+                    today: \$misc_today,
+                    meetings_today: \$misc_meetings_today,
+                    accounts_today: \$misc_accounts_today,
+                  },
+                  current: {
+                    $(for s in ${!SCALE_RUNNING[@]}; do
+                      printf '"%s": $%s_scale_current,\n' $s ${s} |
+                      tr - _ # dashes not allowed in keys
+                    done | sort)
+                  },
+                  target: {
+                    $(for s in ${!SCALE_TO[@]}; do
+                      printf '"%s": $%s_scale_target,\n' $s ${s} |
+                      tr - _ # dashes not allowed in keys
+                    done | sort)
+                  }"
+                fi
+                )
               }
             }
           }
@@ -1099,11 +1122,22 @@ ls_instance() {
           done
         treefmt branch close
       if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
-        treefmt node "Scaling"
+        treefmt node "Scaling" "(meetings on $(date +%F): $MEETINGS_TODAY - users in active meetings: $ACCOUNTS_TODAY)"
           treefmt branch create
-            for service in $(printf "%s\n" "${!service_scaling[@]}" | sort); do
-              treefmt node "${service}" "${service_scaling[$service]}"
+            for service in "${!SCALE_RUNNING[@]}"; do
+              arrow="→"
+              vstr=
+              if [[ "${SCALE_FROM[$service]}" -lt "${SCALE_TO[$service]}" ]]; then
+                arrow="↗"
+                vstr="!"
+              elif [[ "${SCALE_FROM[$service]}" -gt "${SCALE_TO[$service]}" ]]; then
+                arrow="↘"
+              fi
+              vstr="${SCALE_RUNNING[$service]} ${arrow} ${SCALE_TO[$service]} ${vstr}"
+              treefmt node "${service}" "$vstr"
             done
+            unset vstr
+            unset arrow
           treefmt branch close
       fi
     treefmt branch close
@@ -1401,89 +1435,83 @@ instance_update() {
   instance_start
 }
 
-instance_autoscale() {
-  declare -A services_changed=()
+autoscale_gather() {
+  local instance
+  local shortname
+  local normalized_shortname
+  if [[ "$#" -gt 0 ]]; then
+    instance="$1"
+    shortname=$(basename "$instance")
+  else
+    instance="$PROJECT_DIR"
+    shortname="$PROJECT_NAME"
+  fi
+  [[ -f "${instance}/${DCCONFIG_FILENAME}" ]] && [[ -f "${instance}/config.yml" ]] ||
+    fatal "$shortname is not a $DEPLOYMENT_MODE instance."
+  normalized_shortname="$(value_from_config_yml "$instance" '.stackName')"
 
-  log_scale() { # Append to metadata
-    for service in ${!services_changed[@]}
-    do
-      append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"):"\
-	"Autoscaled $service from ${SCALE_FROM[$service]} to ${SCALE_TO[$service]}"
-    done
-  }
-
-  # arrays used to store scaling info per service
-  declare -A SCALE_FROM=()
-  declare -A SCALE_TO=()
-  declare -A SCALE_RUNNING=()
-  declare -A SCALE_COMMANDS=()
-  declare -A SCALE_ENVVARS=()
-
-  # .env file handling
-  declare -A service_env_var=()
-  service_env_var[media]=MEDIA_SERVICE_REPLICAS
-  service_env_var[redis-slave]=REDIS_RO_SERVICE_REPLICAS
-  service_env_var[server]=OPENSLIDES_BACKEND_SERVICE_REPLICAS
-  service_env_var[client]=OPENSLIDES_FRONTEND_SERVICE_REPLICAS
-  service_env_var[autoupdate]=OPENSLIDES_AUTOUPDATE_SERVICE_REPLICAS
-
-  get_service_envvar_name() {
-    if [[ -v "service_env_var["$1"]" ]]; then
-      echo "${service_env_var[$1]}"
-    else
-      return 1
-    fi
-  }
-
-  get_scale_env() {
-    local from=
-    from="$(value_from_env "${PROJECT_DIR}" "$1")"
-    # scaling of 1 is empty string in .env
-    [[ -n "$from" ]] ||
-      from=1
-    echo "$from"
-  }
-
-  set_scale_env() {
-    update_env_file "${PROJECT_DIR}/.env" "$1" "$2" --force
-  }
-
-  # if instance not running only env file will be changed
-  local running=1
-  instance_has_services_running "$PROJECT_STACK_NAME" ||
-    running=
-  if [[ -z "$running" ]]; then
-    warn "${PROJECT_NAME} is not running."
-    echo "      The configuration will be updated and changes will take effect" \
-         "upon it's next start."
+  # if instance not running return
+  if ! instance_has_services_running "$normalized_shortname"; then
+    return 1
   fi
 
-  # extract number of accounts from instance metadata if not already done before
-  if [[ -z "$ACCOUNTS" ]]; then
-    [[ -f "${PROJECT_DIR}/metadata.txt" ]] || fatal "metadata.txt does not exist"
-    ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
-    [[ -n "$ACCOUNTS" ]] || fatal "ACCOUNTS metadatum not specified for $PROJECT_NAME"
+  # gather active meetings of today and extract number of users
+  MEETINGS_TODAY=0
+  ACCOUNTS_TODAY=0
+  local today=$(date +%s)
+
+  j_meeting_data=$("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance") meeting --fields start_time,end_time,user_ids)
+  for i in $(jq '(. | keys)[]' <<< "$j_meeting_data"); do
+    start_time="$(jq ".${i}.start_time" <<< "$j_meeting_data")"
+    end_time="$(jq ".${i}.end_time" <<< "$j_meeting_data")"
+    users="$(jq ".${i}.user_ids | length" <<< "$j_meeting_data")"
+    [[ "$start_time" -gt 0 ]] || [[ "$end_time" -gt 0 ]] ||
+      continue
+    # end_time is 00:00h on final event day, but we want scaling to end only on the next day
+    # -> add one day minus one second to the timestamp (+ 86399s)
+    ((end_time+=86399))
+    [[ "$today" -ge "$start_time" ]] && [[ "$today" -le "$end_time" ]] ||
+      continue
+    ((MEETINGS_TODAY+=1))
+    ((ACCOUNTS_TODAY+="$users"))
+  done
+  if [[ -n "$ACCOUNTS" ]]; then
+    # if --accounts was provided overwrite ACCOUNTS_TODAY
+    ACCOUNTS_TODAY="$ACCOUNTS"
+  else
+    # else read current number of users in the instance
+    ACCOUNTS=$("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance") user --fields id | jq '. | length')
   fi
-  # unnessecary check for good measure
-  [[ -f "${PROJECT_DIR}/.env" ]] ||
-    fatal ".env does not exist"
+
+  # ask current scalings from docker
+  while read -r service s_scale; do
+    [[ "$s_scale" =~ ([0-9]+)/([0-9]+) ]]
+    SCALE_RUNNING["$service"]="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+    SCALE_FROM["$service"]="${BASH_REMATCH[2]}"
+    # will be overwritten when parsing config
+    SCALE_TO["$service"]="${BASH_REMATCH[2]}"
+  done < <(docker stack services --format '{{ .Name }} {{ .Replicas }}' "$normalized_shortname" |
+    gawk '{ sub(/^.+_/, "", $1); print } ')
 
   # fallback: autoscale everything to 1 if not configured otherwise
   [[ -n "$AUTOSCALE_ACCOUNTS_OVER" ]] ||
-    AUTOSCALE_ACCOUNTS_OVER[0]="media=1 redis-slave=1 server=1 client=1 autoupdate=1"
+    AUTOSCALE_ACCOUNTS_OVER[0]="auth=1 autoupdate=1 backend=1 backendManage=1 client=1 datastoreReader=1 datastoreWriter=1 icc=1 manage=1 media=1 proxy=1 redis=1 vote=1"
+
   [[ -n "$AUTOSCALE_RESET_ACCOUNTS_OVER" ]] ||
-    AUTOSCALE_RESET_ACCOUNTS_OVER[0]="media=1 redis-slave=1 server=1 client=1 autoupdate=1"
+    AUTOSCALE_RESET_ACCOUNTS_OVER[0]="auth=1 autoupdate=1 backend=1 backendManage=1 client=1 datastoreReader=1 datastoreWriter=1 icc=1 manage=1 media=1 proxy=1 redis=1 vote=1"
 
   # parse scale goals from configuration
   # make sure indices are in ascending order
-  if [[ -n "$OPT_RESET" ]]; then
+  if [[ "$MEETINGS_TODAY" -eq 0 ]]; then
     tlist=$(echo "${!AUTOSCALE_RESET_ACCOUNTS_OVER[@]}" | tr " " "\n" | sort -g | tr "\n" " ")
+    accounts="$ACCOUNTS"
   else
     tlist=$(echo "${!AUTOSCALE_ACCOUNTS_OVER[@]}" | tr " " "\n" | sort -g | tr "\n" " ")
+    accounts="$ACCOUNTS_TODAY"
   fi
   for threshold in $tlist; do
-    if [[ "$ACCOUNTS" -ge "$threshold" ]]; then
-      if [ -n "$OPT_RESET" ]; then
+    if [[ "$accounts" -ge "$threshold" ]]; then
+      if [[ "$MEETINGS_TODAY" -eq 0 ]]; then
         scalings="${AUTOSCALE_RESET_ACCOUNTS_OVER[$threshold]}"
       else
         scalings="${AUTOSCALE_ACCOUNTS_OVER[$threshold]}"
@@ -1491,7 +1519,7 @@ instance_autoscale() {
       # parse scalings string one by one ...
       while [[ $scalings =~ ^\ *([a-zA-Z0-9-]+)=([0-9]+)\ * ]]; do
         # and update array
-        SCALE_TO[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+        SCALE_TO["${BASH_REMATCH[1]}"]="${BASH_REMATCH[2]}"
         # truncate parsed info
         scalings="${scalings:${#BASH_REMATCH[0]}}"
       done
@@ -1500,105 +1528,68 @@ instance_autoscale() {
         fatal "scaling values could not be parsed, see: $scalings"
     fi
   done
+}
 
-  if [[ -n "$running" ]]; then
-    # ask current scalings from docker
-    local docker_str="$(docker stack services --format "{{.Name}} {{.Replicas}}" ${PROJECT_STACK_NAME})"
-    for service in "${!SCALE_TO[@]}"
+instance_autoscale() {
+  declare -A services_changed=()
+  log_scale() { # Append to metadata
+    for service in ${!services_changed[@]}
     do
-      [[ "$docker_str" =~ "$PROJECT_STACK_NAME"_"$service"[[:space:]]([0-9]+)/([0-9]+) ]]
-      SCALE_RUNNING["$service"]="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
-      SCALE_FROM["$service"]="${BASH_REMATCH[2]}"
+      append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"):"\
+	"Autoscaled $service from ${SCALE_FROM[$service]} to ${SCALE_TO[$service]}"
     done
-  else
-    # ask current scalings from .env file
-    local from=
-    local envname=
-    for service in "${!SCALE_TO[@]}"
-    do
-      envname=$(get_service_envvar_name "$service") || {
-        warn "$service is not configurable in .env, skipping"
-        continue
-      }
-      from=$(get_scale_env "$envname")
-      SCALE_RUNNING["$service"]="$from"
-      SCALE_FROM["$service"]="$from"
-    done
-  fi
+  }
 
-  # print out overview
-  local fmt_str="%-24s %-12s %-12s\n"
-  # headline
-  if [[ -n "$OPT_RESET" ]]; then
-    echo "Resetting scalings of $PROJECT_NAME:"
-  else
-    echo "$PROJECT_NAME is will be scaled to handle $ACCOUNTS accounts."
-  fi
-  printf "$fmt_str" "<service>" "<scale from>" "<scale to>"
-  # body
-  for service in "${!SCALE_FROM[@]}"
-  do
-    printf "$fmt_str" "$service" "${SCALE_RUNNING[$service]}" "${SCALE_TO[$service]}"
-  done
+  autoscale_gather ||
+    fatal "Cannot autoscale stopped instance"
+
+  declare -A scale_commands=()
 
   # determine services on which action needs to be taken
   for service in "${!SCALE_FROM[@]}"
   do
-    if [[ -n "$OPT_RESET" || -n "$OPT_ALLOW_DOWNSCALE" ]]; then
-      # scale whenever current scale differs from goal
-      if [[ "${SCALE_FROM[$service]}" -ne "${SCALE_TO[$service]}" ]]; then
-        if [[ -n "$running" ]]; then
-          SCALE_COMMANDS[$service]="docker service scale ${PROJECT_STACK_NAME}_${service}=${SCALE_TO[$service]}"
-        fi
-        envname=$(get_service_envvar_name "$service") || {
-          warn "$service is not configurable in .env, scale will not persist"
-          continue
-        }
-        SCALE_ENVVARS[$service]="set_scale_env $envname ${SCALE_TO[$service]}"
-      fi
-    else
-      # only scale upward in case a service has manually been upscaled unexpectedly high
-      if [[ ${SCALE_FROM[$service]} -lt ${SCALE_TO[$service]} ]]; then
-        if [[ -n "$running" ]]; then
-          SCALE_COMMANDS[$service]="docker service scale ${PROJECT_STACK_NAME}_${service}=${SCALE_TO[$service]}"
-        fi
-        envname=$(get_service_envvar_name "$service") || {
-          warn "$service is not configurable in .env, scale will not persist"
-          continue
-        }
-        SCALE_ENVVARS[$service]="set_scale_env $envname ${SCALE_TO[$service]}"
-      fi
-    fi
+    # never scale if nothing to do
+    [[ "${SCALE_FROM[$service]}" -ne "${SCALE_TO[$service]}" ]] ||
+      continue
+    # only scale if scaling up or no meeting today (substitute for --allow-downscale behavior)
+    [[ "${SCALE_FROM[$service]}" -lt "${SCALE_TO[$service]}" ]] ||
+        [[ "$MEETINGS_TODAY" -eq 0 ]] ||
+      continue
+
+    scale_commands[$service]="docker service scale ${PROJECT_STACK_NAME}_${service}=${SCALE_TO[$service]}"
   done
 
-  # no commands or env updates generated, i.e. all services are already appropriately scaled
-  if [[ ${#SCALE_COMMANDS[@]} -eq 0 && ${#SCALE_ENVVARS[@]} -eq 0 ]]
-  then
+  # print out overview
+  local fmt_str="%-24s %-12s %-12s\n"
+  # headline
+  if [[ "$MEETINGS_TODAY" -eq 0 ]]; then
+    echo "Resetting scalings of $PROJECT_NAME to handle $ACCOUNTS accounts in idle mode. $MEETINGS_TODAY meetings on $(date +%F)."
+  else
+    echo "Scaling $PROJECT_NAME to handle $ACCOUNTS_TODAY accounts in $MEETINGS_TODAY meetings on $(date +%F)."
+  fi
+  printf "$fmt_str" "<service>" "<scale from>" "<scale to>"
+  # body
+  for service in "${!scale_commands[@]}"
+  do
+    printf "$fmt_str" "$service" "${SCALE_RUNNING[$service]}" "${SCALE_TO[$service]}"
+  done
+
+  # all services are already appropriately scaled
+  [[ ${#scale_commands[@]} -gt 0 ]] || {
     echo "No action required"
     return 0
-  fi
+  }
 
-  # if dry run, print commands + env updates instead of performing them
-  if [[ -n "$OPT_DRY_RUN" ]]; then
-      echo "!DRY RUN!"
-  fi
+  # if dry run, print commands instead of performing them
+  [[ -z "$OPT_DRY_RUN" ]] ||
+    echo "!DRY RUN!"
   # docker scale commands 
-  for service in "${!SCALE_COMMANDS[@]}"
+  for service in "${!scale_commands[@]}"
   do
     if [[ -n "$OPT_DRY_RUN" ]]; then
-        echo "${SCALE_COMMANDS[$service]}"
+      echo "${scale_commands[$service]}"
     else
-      ${SCALE_COMMANDS[$service]}
-      services_changed[$service]=1
-    fi
-  done
-  # env updates
-  for service in "${!SCALE_ENVVARS[@]}"
-  do
-    if [[ -n "$OPT_DRY_RUN" ]]; then
-        echo "${SCALE_ENVVARS[$service]}"
-    else
-      ${SCALE_ENVVARS[$service]}
+      ${scale_commands[$service]}
       services_changed[$service]=1
     fi
   done
@@ -1667,8 +1658,6 @@ longopt=(
   management-tool:
 
   # autoscaling
-  allow-downscale
-  reset-scale
   accounts:
   dry-run
 )
@@ -1792,14 +1781,6 @@ while true; do
       OPT_USE_PARALLEL=0
       OPT_FAST=
       CURL_OPTS=(--max-time 60 --retry 5 --retry-delay 1 --retry-max-time 0)
-      shift 1
-      ;;
-    --allow-downscale)
-      OPT_ALLOW_DOWNSCALE=1
-      shift 1
-      ;;
-    --reset-scale)
-      OPT_RESET=1
       shift 1
       ;;
     --accounts)
@@ -1983,14 +1964,15 @@ case "$MODE" in
     add_to_haproxy_cfg
     run_hook "post-${MODE}"
     # read accounts for autoscale
-    #if [[ -f "${PROJECT_DIR}/metadata.txt" ]]; then
-    #  ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
-    #  if [[ -n "$ACCOUNTS" ]]; then
-    #    # initially set to non-power mode (= --reset)
-    #    OPT_RESET=1
-    #    instance_autoscale
-    #  fi
-    #fi
+
+    # TODO: evauluate the need of this, probably just run autoscale everytime
+    # without additional checks. Same for instance_start
+    if [[ -f "${PROJECT_DIR}/metadata.txt" ]]; then
+      ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
+      if [[ -n "$ACCOUNTS" ]]; then
+        instance_autoscale
+      fi
+    fi
     ask_start || true
     ;;
   clone)
@@ -2061,6 +2043,7 @@ case "$MODE" in
     create_and_check_pid_file
     [[ -f "$CONFIG" ]] && echo "Applying options from ${CONFIG}." || true
     arg_check || { usage; exit 2; }
+    select_management_tool
     instance_autoscale
     ;;
   *)
