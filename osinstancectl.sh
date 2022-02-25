@@ -1300,7 +1300,7 @@ instance_setup_organization() {
   if [[ -r "${file}.setup" ]]; then
     # XXX: The syntax of `openslides set` might change in the future
     "${MANAGEMENT_TOOL}" set $(openslides_connect_opts "$PROJECT_DIR") organization \
-      "${file}.setup"
+      -f "${file}.setup"
     mv "${file}.setup" "$file"
   fi
 }
