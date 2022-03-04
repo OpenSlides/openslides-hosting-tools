@@ -510,15 +510,11 @@ create_user_secrets_file() {
 ---
 first_name: "$first_name"
 last_name: "$last_name"
-username: "$first_name $last_name"
+username: "$first_name$last_name"
 email: "$email"
 default_password: "$PW"
 is_active: true
 organization_management_level: can_manage_organization
-committee__management_level:
-  can_manage: [1]
-group__ids:
-  1: [1, 2]
 EOF
   fi
 }
@@ -987,10 +983,7 @@ ls_instance() {
       local OPENSLIDES_USER_LASTNAME=$(yq eval .last_name "${user_secrets}")
       local OPENSLIDES_USER_PASSWORD=$(yq eval .default_password "${user_secrets}")
       local OPENSLIDES_USER_EMAIL=$(yq eval .email "${user_secrets}")
-      if [[ -n "${OPENSLIDES_USER_FIRSTNAME}" ]] &&
-          [[ -n "${OPENSLIDES_USER_LASTNAME}" ]]; then
-        user_name="${OPENSLIDES_USER_FIRSTNAME} ${OPENSLIDES_USER_LASTNAME}"
-      fi
+      user_name=$(yq eval .username "${user_secrets}")
     fi
   fi
 
@@ -2095,12 +2088,12 @@ case "$MODE" in
 
     # TODO: evauluate the need of this, probably just run autoscale everytime
     # without additional checks. Same for instance_start
-    if [[ -f "${PROJECT_DIR}/metadata.txt" ]]; then
-      ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
-      if [[ -n "$ACCOUNTS" ]]; then
-        instance_autoscale
-      fi
-    fi
+    #if [[ -f "${PROJECT_DIR}/metadata.txt" ]]; then
+    #  ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
+    #  if [[ -n "$ACCOUNTS" ]]; then
+    #    instance_autoscale
+    #  fi
+    #fi
     ask_start || true
     ;;
   clone)
