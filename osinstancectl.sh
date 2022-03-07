@@ -1066,7 +1066,7 @@ ls_instance() {
       done
     )
     local jq_service_scaling_args=$(
-      if [[ "$instance_is_running" -eq 1 ]];then
+      if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
         for s in "${!SCALE_RUNNING[@]}"; do
           v_current=${SCALE_RUNNING[$s]}
           v_target=${SCALE_TO[$s]}
@@ -1139,7 +1139,7 @@ ls_instance() {
               },
               scaling: {
                 $(
-                if [[ "$instance_is_running" -eq 1 ]]; then
+                if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
                   # Iterate over all known services; their values get defined by jq
                   # --arg options.
                   printf "misc: {
