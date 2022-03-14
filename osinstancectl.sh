@@ -1058,8 +1058,14 @@ ls_instance() {
       jitsi_room_password
     do
       stat_meeting_name[$id]=$name
+      # Format the meeting date/duration string
       if [[ "$start" -gt 0 ]] && [[ "$end" -gt 0 ]]; then
-        stat_meeting_dates[$id]="$(date -I -d "@$start") – $(date -I -d "@$end")"
+        local meeting_duration=$(( (end - start) / 60/60/24 + 1)) # in days
+        if [[ "$start" -eq "$end" ]]; then
+          stat_meeting_dates[$id]="$(date -I -d "@$start") (${meeting_duration}d)"
+        else
+          stat_meeting_dates[$id]="$(date -I -d "@$start") – $(date -I -d "@$end") (${meeting_duration}d)"
+        fi
       fi
       if [[ -n "${jitsi_domain}" ]] && [[ -n "${jitsi_room_name}" ]]; then
         printf -v stat_meeting_jitsi[$id] "%s/%s" "${jitsi_domain}" "${jitsi_room_name}"
