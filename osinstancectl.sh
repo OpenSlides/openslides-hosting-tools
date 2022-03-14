@@ -67,6 +67,8 @@ OPENSLIDES_USER_EMAIL=
 OPENSLIDES_USER_PASSWORD=
 OPT_PRECISE_PROJECT_NAME=
 CURL_OPTS=(--max-time 1 --retry 2 --retry-delay 1 --retry-max-time 3)
+HAS_DOCKER_ACCESS=
+HAS_MANAGEMENT_ACCESS=
 
 # Scale related
 declare -A SCALE_FROM=()
@@ -277,6 +279,10 @@ arg_check() {
     fatal "Please specify a project name"; return 2;
   }
   case "$MODE" in
+    "start" | "stop" | "remove" | "erase" | "update" | "autoscale" | "create")
+      [[ "$HAS_DOCKER_ACCESS" ]] ||
+        fatal "User $USER does not have access to the Docker daemon.  See \`docker info\`."
+      ;;
     "start" | "stop" | "remove" | "erase" | "update" | "autoscale")
       [[ -d "$PROJECT_DIR" ]] || {
         fatal "Instance '${PROJECT_NAME}' not found."
@@ -423,6 +429,8 @@ openslides_connect_opts() {
   local dir=${1-$PROJECT_DIR}
   local port=$(value_from_config_yml "$dir" '.port')
   local secret="${dir}/secrets/manage_auth_password"
+  # The management tool/service can't be used without access to the secret.
+  [[ -r "$secret" ]] || return 1
   echo "-a 127.0.0.1:${port} --password-file $secret --no-ssl"
 }
 
@@ -644,6 +652,7 @@ currently_running_version() {
   # Retrieve the OpenSlides image tags actually in use.
   case "$DEPLOYMENT_MODE" in
     "stack")
+      [[ "$HAS_DOCKER_ACCESS" ]] || return 1
       docker stack services --format '{{ .Image }}' "${PROJECT_STACK_NAME}" |
       gawk -F: '# Skip expected non-OpenSlides images
         $1 == "redis" && $2 == "latest" { next }
@@ -867,6 +876,12 @@ ls_instance() {
   [[ -f "${instance}/${DCCONFIG_FILENAME}" ]] && [[ -f "${instance}/config.yml" ]] ||
     fatal "$shortname is not a $DEPLOYMENT_MODE instance."
 
+  # Check if access to the openslides management tool/service is available.  If
+  # not, some function must be skipped.
+  if openslides_connect_opts "$instance" >/dev/null; then
+    HAS_MANAGEMENT_ACCESS=1
+  fi
+
   #  For stacks, get the normalized shortname
   PROJECT_STACK_NAME="$(value_from_config_yml "$instance" '.stackName')"
   [[ -z "${PROJECT_STACK_NAME}" ]] ||
@@ -889,7 +904,9 @@ ls_instance() {
     version="[skipped]"
     if [[ -z "$OPT_FAST" ]]; then
       instance_health_status "$port" || sym=$SYM_ERROR
-      version=$(currently_running_version)
+      if [[ "$HAS_DOCKER_ACCESS" ]]; then
+        version=$(currently_running_version)
+      fi
     fi
   else
     # If we can not connect to the reverse proxy, the instance may have been
@@ -897,7 +914,7 @@ ls_instance() {
     version=
     sym="$SYM_STOPPED"
     instance_is_running=0
-    if [[ -z "$OPT_FAST" ]] &&
+    if [[ "$HAS_DOCKER_ACCESS" ]] && [[ -z "$OPT_FAST" ]] &&
         instance_has_services_running "$normalized_shortname"; then
       # The instance has been deployed but it is unreachable
       version=
@@ -964,7 +981,9 @@ ls_instance() {
     service_versions[management-tool]=$(value_from_config_yml "$instance" '.managementToolHash') || true
 
     # Get service scalings
-    if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
+    if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]] &&
+          [[ "$HAS_DOCKER_ACCESS" ]] && [[ "$HAS_MANAGEMENT_ACCESS" ]]
+    then
       autoscale_gather "$instance" || true
     fi
   fi
@@ -997,62 +1016,62 @@ ls_instance() {
   fi
 
   # --stats
-  if [[ "$instance_is_running" -eq 1 ]]; then
+  if [[ -n "$OPT_STATS" || -n "$OPT_JSON" ]] &&
+      [[ "$HAS_MANAGEMENT_ACCESS" ]] && [[ "$instance_is_running" -eq 1 ]]
+  then
     mngmt_cmd=("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance"))
-    if [[ -n "$OPT_STATS" ]] || [[ -n "$OPT_JSON" ]]; then
-      #
-      # Organization
-      IFS=$'\t' read -r \
-          stats_limit_of_users \
-          stats_limit_of_meetings \
-          stats_active_meetings \
-          stats_feature_evoting \
-          stats_feature_chat \
-        < <("${mngmt_cmd[@]}" organization | jq -r '
-            .[] | [
-              .limit_of_users,
-              .limit_of_meetings,
-              (.active_meeting_ids | length),
-              .enable_electronic_voting,
-              .enable_chat
-            ] | @tsv')
-      # Create array of enabled features for later output formatting
-      [[ "${stats_feature_chat:-false}" = false ]] || features_enabled+=(chat)
-      [[ "${stats_feature_evoting:-false}" = false ]] || features_enabled+=(evoting)
-      #
-      # User
-      stats_total_users=$("${mngmt_cmd[@]}" user --fields id | jq -r '. | length')
-      stats_active_users=$("${mngmt_cmd[@]}" user --fields id --filter=is_active=true  | jq -r '. | length')
-      #
-      # Meetings
-      declare -A stat_meeting_name=()
-      declare -A stat_meeting_dates=()
-      declare -A stat_meeting_jitsi=()
-      while IFS=$'\t' read -r \
-        id \
-        name \
-        start \
-        end \
-        jitsi_domain \
-        jitsi_room_name \
-        jitsi_room_password
-      do
-        stat_meeting_name[$id]=$name
-        if [[ "$start" -gt 0 ]] && [[ "$end" -gt 0 ]]; then
-          stat_meeting_dates[$id]="$(date -I -d "@$start") – $(date -I -d "@$end")"
-        fi
-        if [[ -n "${jitsi_domain}" ]] && [[ -n "${jitsi_room_name}" ]]; then
-          printf -v stat_meeting_jitsi[$id] "%s/%s" "${jitsi_domain}" "${jitsi_room_name}"
-          [[ -z "${jitsi_room_password}" ]] || stat_meeting_jitsi[$id]+=" (${jitsi_room_password})"
-        fi
-      done < <("${mngmt_cmd[@]}" meeting \
-        --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
-        jq -cr '.[] | flatten | @tsv')
-      # Meeting info in JSON format for --json
-      stats_meetings_json=$("${mngmt_cmd[@]}" meeting \
-        --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
-        jq '{ meetings: [.[]] }')
-    fi
+    #
+    # Organization
+    IFS=$'\t' read -r \
+        stats_limit_of_users \
+        stats_limit_of_meetings \
+        stats_active_meetings \
+        stats_feature_evoting \
+        stats_feature_chat \
+      < <("${mngmt_cmd[@]}" organization | jq -r '
+          .[] | [
+            .limit_of_users,
+            .limit_of_meetings,
+            (.active_meeting_ids | length),
+            .enable_electronic_voting,
+            .enable_chat
+          ] | @tsv')
+    # Create array of enabled features for later output formatting
+    [[ "${stats_feature_chat:-false}" = false ]] || features_enabled+=(chat)
+    [[ "${stats_feature_evoting:-false}" = false ]] || features_enabled+=(evoting)
+    #
+    # User
+    stats_total_users=$("${mngmt_cmd[@]}" user --fields id | jq -r '. | length')
+    stats_active_users=$("${mngmt_cmd[@]}" user --fields id --filter=is_active=true  | jq -r '. | length')
+    #
+    # Meetings
+    declare -A stat_meeting_name=()
+    declare -A stat_meeting_dates=()
+    declare -A stat_meeting_jitsi=()
+    while IFS=$'\t' read -r \
+      id \
+      name \
+      start \
+      end \
+      jitsi_domain \
+      jitsi_room_name \
+      jitsi_room_password
+    do
+      stat_meeting_name[$id]=$name
+      if [[ "$start" -gt 0 ]] && [[ "$end" -gt 0 ]]; then
+        stat_meeting_dates[$id]="$(date -I -d "@$start") – $(date -I -d "@$end")"
+      fi
+      if [[ -n "${jitsi_domain}" ]] && [[ -n "${jitsi_room_name}" ]]; then
+        printf -v stat_meeting_jitsi[$id] "%s/%s" "${jitsi_domain}" "${jitsi_room_name}"
+        [[ -z "${jitsi_room_password}" ]] || stat_meeting_jitsi[$id]+=" (${jitsi_room_password})"
+      fi
+    done < <("${mngmt_cmd[@]}" meeting \
+      --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
+      jq -cr '.[] | flatten | @tsv')
+    # Meeting info in JSON format for --json
+    stats_meetings_json=$("${mngmt_cmd[@]}" meeting \
+      --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
+      jq '{ meetings: [.[]] }')
   fi
 
   # JSON ouput
@@ -1074,9 +1093,6 @@ ls_instance() {
           printf -- '--arg %s_scale_current %s\n' "$s" "$v_current"
           printf -- '--arg %s_scale_target %s\n' "$s" "$v_target"
         done
-        printf -- '--arg misc_today %s\n' "$(date +%F)"
-        printf -- '--arg misc_meetings_today %s\n' "$MEETINGS_TODAY"
-        printf -- '--arg misc_accounts_today %s\n' "$ACCOUNTS_TODAY"
       fi
     )
 
@@ -1101,6 +1117,9 @@ ls_instance() {
         --argjson "limit_users"     "${stats_limit_of_users:-null}"     \
         --argjson "feature_chat"    "${stats_feature_chat:-null}"       \
         --argjson "feature_evoting" "${stats_feature_evoting:-null}"    \
+        --arg      "misc_today"     "$(date +%F)"                       \
+        --argjson  "misc_meetings_today" "${MEETINGS_TODAY:-null}"      \
+        --argjson  "misc_accounts_today" "${ACCOUNTS_TODAY:-null}"      \
         --arg     "metadata"        "$(printf "%s\n" "${metadata[@]}")" \
         $jq_image_version_args \
         $jq_service_scaling_args \
@@ -1206,8 +1225,11 @@ ls_instance() {
             treefmt node "${service}" "$(highlight_match "${service_versions[$service]}" "$FILTER_VERSION")"
           done
         treefmt branch close
-      if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
-        treefmt node "Scaling" "(meetings on $(date +%F): $MEETINGS_TODAY - users in active meetings: $ACCOUNTS_TODAY)"
+      if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]] &&
+            [[ "$HAS_DOCKER_ACCESS" ]] && [[ "$HAS_MANAGEMENT_ACCESS" ]]
+      then
+        treefmt node "Scaling" "(meetings on $(date +%F): ${MEETINGS_TODAY:-N/A} -" \
+              "users in active meetings: ${ACCOUNTS_TODAY:-N/A})"
           treefmt branch create
             for service in "${!SCALE_RUNNING[@]}"; do
               arrow="→"
@@ -1243,10 +1265,10 @@ ls_instance() {
   fi
 
   # --stats
-  if [[ -n "$OPT_STATS" ]]; then
+  if [[ -n "$OPT_STATS" ]] &&
+      [[ "$HAS_MANAGEMENT_ACCESS" ]] && [[ "$instance_is_running" -eq 1 ]]
+  then
     ls_is_extended=1
-  fi
-  if [[ -n "$OPT_STATS" ]] && [[ "$instance_is_running" -eq 1 ]]; then
     local this_meeting_name
     local meeting_node_header
     local meeting_node_body
@@ -2001,6 +2023,11 @@ DEPS=(
 for i in "${DEPS[@]}"; do
     check_for_dependency "$i"
 done
+
+# Check if user has access to docker
+if docker info >/dev/null 2>&1; then
+  HAS_DOCKER_ACCESS=1
+fi
 
 # PROJECT_NAME should be lower-case
 PROJECT_NAME="$(echo "$PROJECT_NAME" | tr '[A-Z]' '[a-z]')"
