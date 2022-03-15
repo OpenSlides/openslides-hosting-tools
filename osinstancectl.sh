@@ -1036,48 +1036,46 @@ ls_instance() {
             .enable_electronic_voting,
             .enable_chat
           ] | @tsv')
-    # Create array of enabled features for later output formatting
-    [[ "${stats_feature_chat:-false}" = false ]] || features_enabled+=(chat)
-    [[ "${stats_feature_evoting:-false}" = false ]] || features_enabled+=(evoting)
     #
     # User
     stats_total_users=$("${mngmt_cmd[@]}" user --fields id | jq -r '. | length')
     stats_active_users=$("${mngmt_cmd[@]}" user --fields id --filter=is_active=true  | jq -r '. | length')
     #
     # Meetings
-    declare -A stat_meeting_name=()
-    declare -A stat_meeting_dates=()
-    declare -A stat_meeting_jitsi=()
-    while IFS=$'\t' read -r \
-      id \
-      name \
-      start \
-      end \
-      jitsi_domain \
-      jitsi_room_name \
-      jitsi_room_password
-    do
-      stat_meeting_name[$id]=$name
-      # Format the meeting date/duration string
-      if [[ "$start" -gt 0 ]] && [[ "$end" -gt 0 ]]; then
-        local meeting_duration=$(( (end - start) / 60/60/24 + 1)) # in days
-        if [[ "$start" -eq "$end" ]]; then
-          stat_meeting_dates[$id]="$(date -I -d "@$start") (${meeting_duration}d)"
-        else
-          stat_meeting_dates[$id]="$(date -I -d "@$start") – $(date -I -d "@$end") (${meeting_duration}d)"
-        fi
-      fi
-      if [[ -n "${jitsi_domain}" ]] && [[ -n "${jitsi_room_name}" ]]; then
-        printf -v stat_meeting_jitsi[$id] "%s/%s" "${jitsi_domain}" "${jitsi_room_name}"
-        [[ -z "${jitsi_room_password}" ]] || stat_meeting_jitsi[$id]+=" (${jitsi_room_password})"
-      fi
-    done < <("${mngmt_cmd[@]}" meeting \
-      --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
-      jq -cr '.[] | flatten | @tsv')
-    # Meeting info in JSON format for --json
-    stats_meetings_json=$("${mngmt_cmd[@]}" meeting \
-      --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
-      jq '{ meetings: [.[]] }')
+    if [[ "$OPT_STATS" ]]; then
+      # Meeting info for regular output format
+      declare -A stat_meeting_name=()
+      declare -A stat_meeting_start_date=()
+      declare -A stat_meeting_end_date=()
+      declare -A stat_meeting_jitsi_domain=()
+      declare -A stat_meeting_jitsi_room_name=()
+      declare -A stat_meeting_jitsi_room_password=()
+      declare -A stat_meeting_features=()
+      while IFS=$'\t' read -r \
+        id \
+        name \
+        start \
+        end \
+        jitsi_domain \
+        jitsi_room_name \
+        jitsi_room_password
+      do
+        stat_meeting_name[$id]=$name
+        stat_meeting_start_date[$id]=$start
+        stat_meeting_end_date[$id]=$end
+        stat_meeting_jitsi_domain[$id]=$jitsi_domain
+        stat_meeting_jitsi_room_name[$id]=$jitsi_room_name
+        stat_meeting_jitsi_room_password[$id]=$jitsi_room_password
+      done < <("${mngmt_cmd[@]}" meeting \
+        --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
+        jq -cr '.[] | flatten | @tsv')
+    fi
+    if [[ "$OPT_JSON" ]]; then
+      # Meeting info in JSON format for --json
+      stats_meetings_json=$("${mngmt_cmd[@]}" meeting \
+        --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
+        jq '{ meetings: [.[]] }')
+    fi
   fi
 
   # JSON ouput
@@ -1278,20 +1276,50 @@ ls_instance() {
     local this_meeting_name
     local meeting_node_header
     local meeting_node_body
+    local start
+    local end
+    local duration
+    local features_enabled=()
+    [[ "${stats_feature_chat:-false}" = false ]] || features_enabled+=(chat)
+    [[ "${stats_feature_evoting:-false}" = false ]] || features_enabled+=(evoting)
     treefmt node "Stats"
       treefmt branch create
       treefmt node "Meetings" "${stats_active_meetings:-}/${stats_limit_of_meetings:-}"
         treefmt branch create
-        # Iterate over sorted array keys
+        # Meetings: iterate over sorted array keys
         for i in $(printf "%s\n" "${!stat_meeting_name[@]}" | sort -n); do
           this_meeting_name="${stat_meeting_name[$i]}"
-          # Abbreviate long meeting titles
+          # Abbreviate long meeting titles and set node name
           [[ "${#this_meeting_name}" -le 15 ]] || this_meeting_name="${this_meeting_name:0:15}."
-          printf -v meeting_node_header "%02d: %s" $i "${this_meeting_name}"
-          meeting_node_body="${stat_meeting_dates[$i]:-}"
-          if [[ -n "${stat_meeting_jitsi[$i]:-}" ]]; then
-            meeting_node_body="${meeting_node_body} / ${stat_meeting_jitsi[$i]:-}"
+          printf -v meeting_node_header "%02d: %s" "$i" "${this_meeting_name}"
+          #
+          # Format the meeting date/duration string
+          meeting_node_body=
+          start=
+          end=
+          duration=
+          start="${stat_meeting_start_date[$i]:-0}"
+          end="${stat_meeting_end_date[$i]:-0}"
+          if [[ "$start" -gt 0 ]] && [[ "$end" -gt 0 ]]; then
+            duration=$(( (end - start) / 60/60/24 + 1)) # in days
+            if [[ "$start" -eq "$end" ]]; then
+              printf -v meeting_node_body "%s (%s)" "$(date -I -d "@$start")" "${duration}d"
+            else
+              printf -v meeting_node_body "%s – %s (%s)" \
+                "$(date -I -d "@$start")" "$(date -I -d "@$end")" "${duration}d"
+            fi
           fi
+          #
+          # Append Jitsi info if available
+          if [[ -n "${stat_meeting_jitsi_domain[$i]:-}" ]] && [[ -n "${stat_meeting_jitsi_room_name[$i]:-}" ]]
+          then
+            printf -v meeting_node_body "%s: %s/%s" "${meeting_node_body}" \
+              "${stat_meeting_jitsi_domain[$i]}" "${stat_meeting_jitsi_room_name[$i]}"
+            [[ -z "${stat_meeting_jitsi_room_password[$i]:-}" ]] ||
+              printf -v meeting_node_body "%s: (%s)" "${meeting_node_body}" \
+                "${stat_meeting_jitsi_room_password[$i]}"
+          fi
+          #
           treefmt node "$meeting_node_header" "${meeting_node_body}"
         done
         treefmt branch close
