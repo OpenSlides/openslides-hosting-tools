@@ -1636,8 +1636,11 @@ autoscale_gather() {
     start_time="$(jq ".${i}.start_time" <<< "$j_meeting_data")"
     end_time="$(jq ".${i}.end_time" <<< "$j_meeting_data")"
     users="$(jq ".${i}.user_ids | length" <<< "$j_meeting_data")"
-    [[ "$start_time" -gt 0 ]] || [[ "$end_time" -gt 0 ]] ||
+    if [[ "$start_time" == null ]] || [[ "$end_time" == null ]] ||
+        [[ "$start_time" -le 0 ]] || [[ "$end_time" -le 0 ]]
+    then
       continue
+    fi
     # end_time is 00:00h on final event day, but we want scaling to end only on the next day
     # -> add one day minus one second to the timestamp (+ 86399s)
     ((end_time+=86399))
