@@ -17,7 +17,7 @@ set -eu
 set -o noclobber
 set -o pipefail
 
-# Defaults (override in /etc/osinstancectl)
+# Defaults (override in /etc/os4instancectl)
 INSTANCES="/srv/openslides/os4-instances"
 COMPOSE_TEMPLATE=
 CONFIG_YML_TEMPLATE=
@@ -2125,7 +2125,6 @@ case "$MODE" in
     ;;
   create)
     create_and_check_pid_file
-    [[ -f "$CONFIG" ]] && echo "Applying options from ${CONFIG}." || true
     arg_check || { usage; exit 2; }
     # Use defaults in the absence of options
     echo "Creating new instance: $PROJECT_NAME"
@@ -2220,7 +2219,6 @@ case "$MODE" in
     ;;
   update)
     create_and_check_pid_file
-    [[ -f "$CONFIG" ]] && echo "Applying options from ${CONFIG}." || true
     arg_check || { usage; exit 2; }
     select_management_tool
     run_hook "pre-${MODE}"
@@ -2229,7 +2227,6 @@ case "$MODE" in
     ;;
   autoscale)
     create_and_check_pid_file
-    [[ -f "$CONFIG" ]] && echo "Applying options from ${CONFIG}." || true
     arg_check || { usage; exit 2; }
     select_management_tool
     instance_autoscale
