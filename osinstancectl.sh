@@ -316,7 +316,7 @@ marker_check() {
 
 hash_management_tool() {
   # Return the SHA256 hash of the selected "openslides" tool.  For lack of
-  # proper versioning, the has is used to track compatibility with individual
+  # proper versioning, the hash is used to track compatibility with individual
   # instances by adding it to each config.yml.
   sha256sum "$MANAGEMENT_TOOL" 2>/dev/null | awk '{ print $1 }' ||
     fatal "$MANAGEMENT_TOOL not found."
@@ -348,11 +348,7 @@ select_management_tool() {
     fi
   fi
   MANAGEMENT_TOOL_HASH=$(hash_management_tool)
-  if [[ -x "$MANAGEMENT_TOOL" ]]; then
-    info "Using 'openslides' tool at $MANAGEMENT_TOOL"
-  else
-    fatal "$MANAGEMENT_TOOL not found."
-  fi
+  [[ -x "$MANAGEMENT_TOOL" ]] || fatal "$MANAGEMENT_TOOL not found."
 }
 
 next_free_port() {
@@ -877,9 +873,12 @@ ls_instance() {
     fatal "$shortname is not a $DEPLOYMENT_MODE instance."
 
   # Check if access to the openslides management tool/service is available.  If
-  # not, some function must be skipped.
-  if openslides_connect_opts "$instance" >/dev/null; then
+  # not, some functions must be skipped.
+  select_management_tool # Configure the correct version for this instance
+  if mngmt_cmd=("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance")); then
     HAS_MANAGEMENT_ACCESS=1
+    # Run an actual test query
+    "${mngmt_cmd[@]}" user --fields id 2>&1 >/dev/null || HAS_MANAGEMENT_ACCESS=
   fi
 
   #  For stacks, get the normalized shortname
@@ -1019,8 +1018,6 @@ ls_instance() {
   if [[ -n "$OPT_STATS" || -n "$OPT_JSON" ]] &&
       [[ "$HAS_MANAGEMENT_ACCESS" ]] && [[ "$instance_is_running" -eq 1 ]]
   then
-    mngmt_cmd=("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance"))
-    #
     # Organization
     IFS=$'\t' read -r \
         stats_limit_of_users \
@@ -1230,26 +1227,30 @@ ls_instance() {
           done
         treefmt branch close
       if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]] &&
-            [[ "$HAS_DOCKER_ACCESS" ]] && [[ "$HAS_MANAGEMENT_ACCESS" ]]
+            [[ "$HAS_DOCKER_ACCESS" ]]
       then
-        treefmt node "Scaling" "(meetings on $(date +%F): ${MEETINGS_TODAY:-N/A} -" \
-              "users in active meetings: ${ACCOUNTS_TODAY:-N/A})"
-          treefmt branch create
-            for service in "${!SCALE_RUNNING[@]}"; do
-              arrow="→"
-              vstr=
-              if [[ "${SCALE_FROM[$service]}" -lt "${SCALE_TO[$service]}" ]]; then
-                arrow="↗"
-                vstr="!"
-              elif [[ "${SCALE_FROM[$service]}" -gt "${SCALE_TO[$service]}" ]]; then
-                arrow="↘"
-              fi
-              vstr="${SCALE_RUNNING[$service]} ${arrow} ${SCALE_TO[$service]} ${vstr}"
-              treefmt node "${service}" "$vstr"
-            done
-            unset vstr
-            unset arrow
-          treefmt branch close
+        if [[ "$HAS_MANAGEMENT_ACCESS" ]]; then
+          treefmt node "Scaling" "(meetings on $(date +%F): ${MEETINGS_TODAY:-N/A} -" \
+                "users in active meetings: ${ACCOUNTS_TODAY:-N/A})"
+            treefmt branch create
+              for service in "${!SCALE_RUNNING[@]}"; do
+                arrow="→"
+                vstr=
+                if [[ "${SCALE_FROM[$service]}" -lt "${SCALE_TO[$service]}" ]]; then
+                  arrow="↗"
+                  vstr="!"
+                elif [[ "${SCALE_FROM[$service]}" -gt "${SCALE_TO[$service]}" ]]; then
+                  arrow="↘"
+                fi
+                vstr="${SCALE_RUNNING[$service]} ${arrow} ${SCALE_TO[$service]} ${vstr}"
+                treefmt node "${service}" "$vstr"
+              done
+              unset vstr
+              unset arrow
+            treefmt branch close
+          else
+            treefmt node "Scaling" "${COL_RED}[Access denied]${COL_NORMAL}"
+          fi
       fi
     treefmt branch close
   fi
@@ -1269,63 +1270,65 @@ ls_instance() {
   fi
 
   # --stats
-  if [[ -n "$OPT_STATS" ]] &&
-      [[ "$HAS_MANAGEMENT_ACCESS" ]] && [[ "$instance_is_running" -eq 1 ]]
-  then
+  if [[ -n "$OPT_STATS" ]] && [[ "$instance_is_running" -eq 1 ]]; then
     ls_is_extended=1
-    local this_meeting_name
-    local meeting_node_header
-    local meeting_node_body
-    local start
-    local end
-    local duration
-    local features_enabled=()
-    [[ "${stats_feature_chat:-false}" = false ]] || features_enabled+=(chat)
-    [[ "${stats_feature_evoting:-false}" = false ]] || features_enabled+=(evoting)
-    treefmt node "Stats"
-      treefmt branch create
-      treefmt node "Meetings" "${stats_active_meetings:-}/${stats_limit_of_meetings:-}"
+    if [[ "$HAS_MANAGEMENT_ACCESS" ]]; then
+      local this_meeting_name
+      local meeting_node_header
+      local meeting_node_body
+      local start
+      local end
+      local duration
+      local features_enabled=()
+      [[ "${stats_feature_chat:-false}" = false ]] || features_enabled+=(chat)
+      [[ "${stats_feature_evoting:-false}" = false ]] || features_enabled+=(evoting)
+      treefmt node "Stats"
         treefmt branch create
-        # Meetings: iterate over sorted array keys
-        for i in $(printf "%s\n" "${!stat_meeting_name[@]}" | sort -n); do
-          this_meeting_name="${stat_meeting_name[$i]}"
-          # Abbreviate long meeting titles and set node name
-          [[ "${#this_meeting_name}" -le 15 ]] || this_meeting_name="${this_meeting_name:0:15}."
-          printf -v meeting_node_header "%02d: %s" "$i" "${this_meeting_name}"
-          #
-          # Format the meeting date/duration string
-          meeting_node_body=
-          start=
-          end=
-          duration=
-          start="${stat_meeting_start_date[$i]:-0}"
-          end="${stat_meeting_end_date[$i]:-0}"
-          if [[ "$start" -gt 0 ]] && [[ "$end" -gt 0 ]]; then
-            duration=$(( (end - start) / 60/60/24 + 1)) # in days
-            if [[ "$start" -eq "$end" ]]; then
-              printf -v meeting_node_body "%s (%s)" "$(date -I -d "@$start")" "${duration}d"
-            else
-              printf -v meeting_node_body "%s – %s (%s)" \
-                "$(date -I -d "@$start")" "$(date -I -d "@$end")" "${duration}d"
+        treefmt node "Meetings" "${stats_active_meetings:-}/${stats_limit_of_meetings:-}"
+          treefmt branch create
+          # Meetings: iterate over sorted array keys
+          for i in $(printf "%s\n" "${!stat_meeting_name[@]}" | sort -n); do
+            this_meeting_name="${stat_meeting_name[$i]}"
+            # Abbreviate long meeting titles and set node name
+            [[ "${#this_meeting_name}" -le 15 ]] || this_meeting_name="${this_meeting_name:0:15}."
+            printf -v meeting_node_header "%02d: %s" "$i" "${this_meeting_name}"
+            #
+            # Format the meeting date/duration string
+            meeting_node_body=
+            start=
+            end=
+            duration=
+            start="${stat_meeting_start_date[$i]:-0}"
+            end="${stat_meeting_end_date[$i]:-0}"
+            if [[ "$start" -gt 0 ]] && [[ "$end" -gt 0 ]]; then
+              duration=$(( (end - start) / 60/60/24 + 1)) # in days
+              if [[ "$start" -eq "$end" ]]; then
+                printf -v meeting_node_body "%s (%s)" "$(date -I -d "@$start")" "${duration}d"
+              else
+                printf -v meeting_node_body "%s – %s (%s)" \
+                  "$(date -I -d "@$start")" "$(date -I -d "@$end")" "${duration}d"
+              fi
             fi
-          fi
-          #
-          # Append Jitsi info if available
-          if [[ -n "${stat_meeting_jitsi_domain[$i]:-}" ]] && [[ -n "${stat_meeting_jitsi_room_name[$i]:-}" ]]
-          then
-            printf -v meeting_node_body "%s: %s/%s" "${meeting_node_body}" \
-              "${stat_meeting_jitsi_domain[$i]}" "${stat_meeting_jitsi_room_name[$i]}"
-            [[ -z "${stat_meeting_jitsi_room_password[$i]:-}" ]] ||
-              printf -v meeting_node_body "%s: (%s)" "${meeting_node_body}" \
-                "${stat_meeting_jitsi_room_password[$i]}"
-          fi
-          #
-          treefmt node "$meeting_node_header" "${meeting_node_body}"
-        done
-        treefmt branch close
-      treefmt node "Users" "${stats_active_users:-}/${stats_total_users:-}/${stats_limit_of_users:-}"
-      treefmt node "Features" "${features_enabled[*]:-"—"}"
-    treefmt branch close
+            #
+            # Append Jitsi info if available
+            if [[ -n "${stat_meeting_jitsi_domain[$i]:-}" ]] && [[ -n "${stat_meeting_jitsi_room_name[$i]:-}" ]]
+            then
+              printf -v meeting_node_body "%s: %s/%s" "${meeting_node_body}" \
+                "${stat_meeting_jitsi_domain[$i]}" "${stat_meeting_jitsi_room_name[$i]}"
+              [[ -z "${stat_meeting_jitsi_room_password[$i]:-}" ]] ||
+                printf -v meeting_node_body "%s: (%s)" "${meeting_node_body}" \
+                  "${stat_meeting_jitsi_room_password[$i]}"
+            fi
+            #
+            treefmt node "$meeting_node_header" "${meeting_node_body}"
+          done
+          treefmt branch close
+        treefmt node "Users" "${stats_active_users:-}/${stats_total_users:-}/${stats_limit_of_users:-}"
+        treefmt node "Features" "${features_enabled[*]:-"—"}"
+      treefmt branch close
+    else
+      treefmt node "Stats" "${COL_RED}[Access denied]${COL_NORMAL}"
+    fi
   fi
 
   # --metadata
