@@ -1148,29 +1148,23 @@ ls_instance() {
               done | sort)
             },
             scaling: {
-              $(
-              if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
-                # Iterate over all known services; their values get defined by jq
-                # --arg options.
-                printf "misc: {
-                  today: \$misc_today,
-                  meetings_today: \$misc_meetings_today,
-                  accounts_today: \$misc_accounts_today,
-                },
-                current: {
-                  $(for s in ${!SCALE_RUNNING[@]}; do
-                    printf '"%s": $%s_scale_current,\n' $s ${s} |
-                    tr - _ # dashes not allowed in keys
-                  done | sort)
-                },
-                target: {
-                  $(for s in ${!SCALE_TO[@]}; do
-                    printf '"%s": $%s_scale_target,\n' $s ${s} |
-                    tr - _ # dashes not allowed in keys
-                  done | sort)
-                }"
-              fi
-              )
+              misc: {
+                today: \$misc_today,
+                meetings_today: \$misc_meetings_today,
+                accounts_today: \$misc_accounts_today,
+              },
+              current: {
+                $(for s in ${!SCALE_RUNNING[@]}; do
+                  printf '"%s": $%s_scale_current,\n' $s ${s} |
+                  tr - _ # dashes not allowed in keys
+                done | sort)
+              },
+              target: {
+                $(for s in ${!SCALE_TO[@]}; do
+                  printf '"%s": $%s_scale_target,\n' $s ${s} |
+                  tr - _ # dashes not allowed in keys
+                done | sort)
+              }
             }
           },
           stats: {
