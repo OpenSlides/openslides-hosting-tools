@@ -1147,41 +1147,30 @@ ls_instance() {
                 tr - _ # dashes not allowed in keys
               done | sort)
             },
-            metadata:   \$metadata,
-            services: {
-              versions: {
+            scaling: {
+              $(
+              if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
                 # Iterate over all known services; their values get defined by jq
                 # --arg options.
-                $(for s in ${!service_versions[@]}; do
-                  printf '"%s": $%s,\n' $s ${s} |
-                  tr - _ # dashes not allowed in keys
-                done | sort)
-              },
-              scaling: {
-                $(
-                if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
-                  # Iterate over all known services; their values get defined by jq
-                  # --arg options.
-                  printf "misc: {
-                    today: \$misc_today,
-                    meetings_today: \$misc_meetings_today,
-                    accounts_today: \$misc_accounts_today,
-                  },
-                  current: {
-                    $(for s in ${!SCALE_RUNNING[@]}; do
-                      printf '"%s": $%s_scale_current,\n' $s ${s} |
-                      tr - _ # dashes not allowed in keys
-                    done | sort)
-                  },
-                  target: {
-                    $(for s in ${!SCALE_TO[@]}; do
-                      printf '"%s": $%s_scale_target,\n' $s ${s} |
-                      tr - _ # dashes not allowed in keys
-                    done | sort)
-                  }"
-                fi
-                )
-              }
+                printf "misc: {
+                  today: \$misc_today,
+                  meetings_today: \$misc_meetings_today,
+                  accounts_today: \$misc_accounts_today,
+                },
+                current: {
+                  $(for s in ${!SCALE_RUNNING[@]}; do
+                    printf '"%s": $%s_scale_current,\n' $s ${s} |
+                    tr - _ # dashes not allowed in keys
+                  done | sort)
+                },
+                target: {
+                  $(for s in ${!SCALE_TO[@]}; do
+                    printf '"%s": $%s_scale_target,\n' $s ${s} |
+                    tr - _ # dashes not allowed in keys
+                  done | sort)
+                }"
+              fi
+              )
             }
           },
           stats: {
