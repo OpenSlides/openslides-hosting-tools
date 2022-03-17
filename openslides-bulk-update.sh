@@ -18,16 +18,19 @@ INSTANCES=()
 UPDATE_ERRORS=()
 PATTERN=
 TAG=
-TIME=
 ME="$(basename -s .sh "${BASH_SOURCE[0]}")"
 MIN_WIDTH=64
+DEFAULT_OPT_JOBS=3
 
 usage() {
 cat << EOF
 Usage: $ME [<options>] --tag=<tag> < <instances in JSON format>
 
-  -t TAG, --tag=TAG   Docker image tag to which to update
-  --at=TIME           "at" timespec, cf. \`man at\`
+  -t TAG, --tag=TAG     Docker image tag to which to update
+  -j JOBS, --jobs=JOBS  Configure the number of jobs to run in parallel
+                        (default: $DEFAULT_OPT_JOBS)
+  --tmux                Display jobs in tmux windows
+  --tmuxpanes           Display jobs in tmux panes
 
 $ME expects the output of "os4instancectl ls --json" on its standard input.
 
@@ -64,12 +67,12 @@ instance_menu() {
     25 $width 16 \
     --separate-output \
     --clear \
-    $* \
+    $@ \
     3>&2 2>&1 1>&3
 }
 
-shortopt="ht:"
-longopt="help,tag:,at:"
+shortopt="ht:j:"
+longopt="help,tag:,jobs:,tmux,tmuxpanes"
 ARGS=$(getopt -o "$shortopt" -l "$longopt" -n "$ME" -- "$@")
 if [ $? -ne 0 ]; then usage; exit 1; fi
 eval set -- "$ARGS"
@@ -81,9 +84,17 @@ while true; do
       TAG="$2"
       shift 2
       ;;
-    --at)
-      TIME="$2"
+    -j | --jobs)
+      OPT_PARALLEL_JOBS="$2"
       shift 2
+      ;;
+    --tmux)
+      OPT_PARALLEL_TMUX="--tmux"
+      shift 1
+      ;;
+    --tmuxpanes)
+      OPT_PARALLEL_TMUX="--tmuxpane"
+      shift 1
       ;;
     -h | --help)
       usage
@@ -100,14 +111,19 @@ PATTERN="$@"
 DEPS=(
   "$OSCTL"
   whiptail
-  at
-  chronic
+  parallel
 )
 for i in "${DEPS[@]}"; do
   command -v "$i" > /dev/null || { fatal "Dependency not found: $i"; }
 done
+# Verify that the /correct/ parallel is available
+parallel -V 2>&1 >/dev/null || fatal "GNU parallel not found."
 # Verify options
 [[ -n "$TAG" ]] || { fatal "Missing option: --tag"; }
+
+mkdir -p /var/log/openslides-bulk-update
+PARALLEL_RESULT_DIR="$(mktemp -d --tmpdir=/var/log/openslides-bulk-update $(date -I).XXX)" || exit 23
+PARALLEL_JOBLOG="${PARALLEL_RESULT_DIR}/joblog"
 
 # Read instance listing from os4instancectl on stdin
 JSON_DATA=$(jq .) || fatal "Input is not in JSON format."
@@ -150,26 +166,25 @@ INSTANCES=($(instance_menu "$TAG" "${INSTANCES[@]}")) # User-selected instances
 if [[ $? -eq 0 ]]; then clear; else exit 3; fi
 [[ ${#INSTANCES[@]} -ge 1 ]] || exit 0
 
-if [[ -z "$TIME" ]]; then
-  # Execute immediately
-  n=0
-  for i in "${INSTANCES[@]}"; do
-    (( n++ ))
-    str=" Updating ${i} (${n}/${#INSTANCES[@]})... "
-    echo
-    echo "$str" | sed -e 's/./—/g'
-    echo "$str"
-    echo "$str" | sed -e 's/./—/g'
-    "$OSCTL" --tag "$TAG" update "$i" || UPDATE_ERRORS+=($i)
-  done
-  if [[ ${#UPDATE_ERRORS[@]} -ge 1 ]]; then
-    printf "\nWARNING: Instances that reported update errors:\n"
-    printf " - %s\n" "${UPDATE_ERRORS[@]}"
-  fi
-else
-  # Prepare "at" job
-  for i in "${INSTANCES[@]}"; do
-    echo "chronic \"$OSCTL\" --tag \"$TAG\" update \"$i\""
-  done |
-  at "$TIME"
+if [[ -z "$OPT_PARALLEL_TMUX" ]]; then
+  # Logging to the result files only works if the tmux options are not set.
+  # Otherwise, the files are created but will remain empty, so their location
+  # is only relevant when the script is executed without tmux.
+  echo "Logging to ${PARALLEL_RESULT_DIR}/."
 fi
+parallel --no-run-if-empty --tag --bar \
+    --joblog "$PARALLEL_JOBLOG" --result "$PARALLEL_RESULT_DIR" \
+    --delay 0.5 --jobs=${OPT_PARALLEL_JOBS:=$DEFAULT_OPT_JOBS} $OPT_PARALLEL_TMUX \
+  "$OSCTL" --no-pid-file --tag="$TAG" update '{}' ::: "${INSTANCES[@]}" || ec=$?
+if [[ $ec -ne 0 ]]; then
+  echo
+  echo "ERRORS ENCOUNTERED! ($PARALLEL_JOBLOG):"
+  echo
+  # Retrieve failed jobs (and their sequence number) from joblog
+  awk -F $'\t' 'NR > 1 && $7 != 0 { printf(" - %02d: %s\n", $1, $9) }' "$PARALLEL_JOBLOG"
+  if [[ -z "$OPT_PARALLEL_TMUX" ]]; then
+    echo
+    echo "Find the logs in $PARALLEL_RESULT_DIR/."
+  fi
+fi
+exit $ec
