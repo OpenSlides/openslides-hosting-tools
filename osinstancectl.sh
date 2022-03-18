@@ -40,22 +40,23 @@ DEPLOYMENT_MODE=
 MODE=
 USAGE=
 DOCKER_IMAGE_TAG_OPENSLIDES=
-OPT_PIDFILE=1
-OPT_LONGLIST=
-OPT_SERVICES=
-OPT_SECRETS=
-OPT_STATS=
-OPT_METADATA=
-OPT_METADATA_SEARCH=
-OPT_JSON=
 OPT_ADD_ACCOUNT=1
-OPT_LOCALONLY=
-OPT_FORCE=
 OPT_DRY_RUN=
 OPT_FAST=
-OPT_PATIENT=
-OPT_USE_PARALLEL="${OPT_USE_PARALLEL:-1}"
+OPT_FORCE=
+OPT_JSON=
+OPT_LOCALONLY=
+OPT_LOG=${OPT_LOG:-1}
+OPT_LONGLIST=
 OPT_MANAGEMENT_TOOL=
+OPT_METADATA=
+OPT_METADATA_SEARCH=
+OPT_PATIENT=
+OPT_PIDFILE=1
+OPT_SECRETS=
+OPT_SERVICES=
+OPT_STATS=
+OPT_USE_PARALLEL="${OPT_USE_PARALLEL:-1}"
 FILTER_STATE=
 FILTER_VERSION=
 CLONE_FROM=
@@ -289,9 +290,8 @@ create_and_check_pid_file() {
   # on /tmp/ requires the PID file mechanism to handle circumstances in which
   # even a stale file can not be removed.
   local pid logname email by message
-  [[ -f "$PIDFILE" ]] && read -r pid logname email < "$PIDFILE"
-  exists="$?"
-  if [[ "$exists" == 0 ]]; then
+  if [[ -f "$PIDFILE" ]]; then
+    read -r pid logname email < "$PIDFILE"
     by=$logname
     [[ -z "$email" ]] || by="${logname} [${email}]"
     message="$ME is already being executed by ${by} (PID: ${pid}, PID file: ${PIDFILE})"
@@ -310,10 +310,9 @@ create_and_check_pid_file() {
         warn "ignoring (--no-pid-file)"
       fi
     fi
-  fi
-  [[ -n "$OPT_PIDFILE" ]] ||
+  elif [[ -z "$OPT_PIDFILE" ]]; then
     return 0
-  if [[ "$exists" != 0 ]]; then
+  else
     # Create the file and allow other users to update it
     touch "$PIDFILE"
     chmod 666 "$PIDFILE"
@@ -370,6 +369,16 @@ arg_check() {
         fatal "Update requires tag or management tool option"
       ;;
   esac
+}
+
+log_output() {
+  dir=$1
+  if [[ "$OPT_LOG" -eq 1 ]]; then
+    mkdir -p "${dir}/log"
+    tee "${dir}/log/${MODE}-$(date "+%F.%s").log"
+  else
+    cat -
+  fi
 }
 
 marker_check() {
@@ -2226,33 +2235,35 @@ case "$MODE" in
     select_management_tool
     PORT=$(next_free_port)
     create_instance_dir
-    update_config_instance_specifics
-    create_admin_secrets_file
-    create_user_secrets_file "${OPENSLIDES_USER_FIRSTNAME}" \
-      "${OPENSLIDES_USER_LASTNAME}" "${OPENSLIDES_USER_EMAIL}"
-    update_config_services_db_connect_params
-    recreate_compose_yml
-    append_metadata "$PROJECT_DIR" ""
-    append_metadata "$PROJECT_DIR" \
-      "$(date +"%F %H:%M"): Instance created (${DEPLOYMENT_MODE})"
-    append_metadata "$PROJECT_DIR" \
-      "$(date +"%F %H:%M"): image=$DOCKER_IMAGE_TAG_OPENSLIDES manage=$MANAGEMENT_TOOL_HASH"
-    [[ -z "$OPT_LOCALONLY" ]] ||
-      append_metadata "$PROJECT_DIR" "No HAProxy config added (--local-only)"
-    add_to_haproxy_cfg
-    run_hook "post-${MODE}"
-    # read accounts for autoscale
+    {
+      update_config_instance_specifics
+      create_admin_secrets_file
+      create_user_secrets_file "${OPENSLIDES_USER_FIRSTNAME}" \
+        "${OPENSLIDES_USER_LASTNAME}" "${OPENSLIDES_USER_EMAIL}"
+      update_config_services_db_connect_params
+      recreate_compose_yml
+      append_metadata "$PROJECT_DIR" ""
+      append_metadata "$PROJECT_DIR" \
+        "$(date +"%F %H:%M"): Instance created (${DEPLOYMENT_MODE})"
+      append_metadata "$PROJECT_DIR" \
+        "$(date +"%F %H:%M"): image=$DOCKER_IMAGE_TAG_OPENSLIDES manage=$MANAGEMENT_TOOL_HASH"
+      [[ -z "$OPT_LOCALONLY" ]] ||
+        append_metadata "$PROJECT_DIR" "No HAProxy config added (--local-only)"
+      add_to_haproxy_cfg
+      run_hook "post-${MODE}"
+      # read accounts for autoscale
 
-    # TODO: evauluate the need of this, probably just run autoscale everytime
-    # without additional checks. Same for instance_start
-    #if [[ -f "${PROJECT_DIR}/metadata.txt" ]]; then
-    #  ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
-    #  if [[ -n "$ACCOUNTS" ]]; then
-    #    instance_autoscale
-    #  fi
-    #fi
-    ask_start || true
-    echo "Done."
+      # TODO: evauluate the need of this, probably just run autoscale everytime
+      # without additional checks. Same for instance_start
+      #if [[ -f "${PROJECT_DIR}/metadata.txt" ]]; then
+      #  ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
+      #  if [[ -n "$ACCOUNTS" ]]; then
+      #    instance_autoscale
+      #  fi
+      #fi
+      ask_start || true
+      echo "Done."
+    } |& log_output "${PROJECT_DIR}"
     ;;
   clone)
     create_and_check_pid_file
@@ -2263,21 +2274,23 @@ case "$MODE" in
     PORT=$(next_free_port)
     run_hook "pre-${MODE}"
     create_instance_dir
-    clone_instance_dir
-    update_config_instance_specifics
-    update_config_services_db_connect_params
-    recreate_compose_yml
-    append_metadata "$PROJECT_DIR" ""
-    append_metadata "$PROJECT_DIR" "Cloned from $CLONE_FROM on $(date)"
-    append_metadata "$PROJECT_DIR" \
-      "$(date +"%F %H:%M"): image=$(value_from_config_yml "$PROJECT_DIR" '.defaults.tag')" \
-      "manage=$MANAGEMENT_TOOL_HASH"
-    [[ -z "$OPT_LOCALONLY" ]] ||
-      append_metadata "$PROJECT_DIR" "No HAProxy config added (--local-only)"
-    add_to_haproxy_cfg
-    run_hook "post-${MODE}"
-    ask_start || true
-    echo "Done."
+    {
+      clone_instance_dir
+      update_config_instance_specifics
+      update_config_services_db_connect_params
+      recreate_compose_yml
+      append_metadata "$PROJECT_DIR" ""
+      append_metadata "$PROJECT_DIR" "Cloned from $CLONE_FROM on $(date)"
+      append_metadata "$PROJECT_DIR" \
+        "$(date +"%F %H:%M"): image=$(value_from_config_yml "$PROJECT_DIR" '.defaults.tag')" \
+        "manage=$MANAGEMENT_TOOL_HASH"
+      [[ -z "$OPT_LOCALONLY" ]] ||
+        append_metadata "$PROJECT_DIR" "No HAProxy config added (--local-only)"
+      add_to_haproxy_cfg
+      run_hook "post-${MODE}"
+      ask_start || true
+      echo "Done."
+    } |& log_output "${PROJECT_DIR}"
     ;;
   list)
     [[ -z "$OPT_PRECISE_PROJECT_NAME" ]] || PROJECT_NAME="^${PROJECT_NAME}$"
@@ -2286,19 +2299,23 @@ case "$MODE" in
   start)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
-    select_management_tool
-    append_metadata "$PROJECT_DIR" \
-      "$(date +"%F %H:%M"): Starting with manage=$MANAGEMENT_TOOL_HASH"
-    instance_start
-    run_hook "post-${MODE}"
-    echo "Done."
+    {
+      select_management_tool
+      append_metadata "$PROJECT_DIR" \
+        "$(date +"%F %H:%M"): Starting with manage=$MANAGEMENT_TOOL_HASH"
+      instance_start
+      run_hook "post-${MODE}"
+      echo "Done."
+    } |& log_output "${PROJECT_DIR}"
     ;;
   stop)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
-    instance_stop
-    run_hook "post-${MODE}"
-    echo "Done."
+    {
+      instance_stop
+      run_hook "post-${MODE}"
+      echo "Done."
+    } |& log_output "${PROJECT_DIR}"
     ;;
   erase)
     create_and_check_pid_file
@@ -2312,26 +2329,32 @@ case "$MODE" in
     echo
     read -rp "Really delete? (uppercase YES to confirm) " ANS
     [[ "$ANS" = "YES" ]] || exit 0
-    instance_erase
-    echo "Done."
+    {
+      instance_erase
+      echo "Done."
+    } |& log_output "${PROJECT_DIR}"
     ;;
   update)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
-    select_management_tool
-    append_metadata "$PROJECT_DIR" \
-      "$(date +"%F %H:%M"): Update using manage=$MANAGEMENT_TOOL_HASH"
-    run_hook "pre-${MODE}"
-    instance_update
-    run_hook "post-${MODE}"
-    echo "Done."
+    {
+      select_management_tool
+      append_metadata "$PROJECT_DIR" \
+        "$(date +"%F %H:%M"): Update using manage=$MANAGEMENT_TOOL_HASH"
+      run_hook "pre-${MODE}"
+      instance_update
+      run_hook "post-${MODE}"
+      echo "Done."
+    } |& log_output "${PROJECT_DIR}"
     ;;
   autoscale)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
-    select_management_tool
-    instance_autoscale
-    echo "Done."
+    {
+      select_management_tool
+      instance_autoscale
+      echo "Done."
+    } |& log_output "${PROJECT_DIR}"
     ;;
   *)
     fatal "Missing command.  Please consult $ME --help."
