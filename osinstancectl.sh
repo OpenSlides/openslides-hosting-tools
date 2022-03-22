@@ -38,6 +38,7 @@ PROJECT_STACK_NAME=
 PORT=
 DEPLOYMENT_MODE=
 MODE=
+USAGE=
 DOCKER_IMAGE_TAG_OPENSLIDES=
 OPT_PIDFILE=1
 OPT_LONGLIST=
@@ -127,6 +128,7 @@ Actions:
                        meetings dates and users. Will only scale down if there
                        no meeting scheduled for today.
                        (adjust values in CONFIG file)
+  help <action>        Print detailed usage information for the given action.
 
 Options:
   -d,
@@ -136,9 +138,16 @@ Options:
   --force              Disable various safety checks
   --color=WHEN         Enable/disable color output.  WHEN is never, always, or
                        auto.
+  --help               Display this help message and exit
+
+EOF
+case "$MODE" in
+  list)
+    cat << EOF
 
   for ls:
     -a, --all          Equivalent to --long --secrets --metadata --services
+                       --stats
     -l, --long         Include more information in extended listing format
     -s, --secrets      Include sensitive information such as login credentials
     -m, --metadata     Include metadata in instance list
@@ -155,29 +164,6 @@ Options:
     --version=REGEXP   Filter results based on the version reported by
                        \`$ME ls\` (not --long; implies --online).
     -j, --json         Enable JSON output format
-
-  for add & update:
-    -t, --tag=TAG      Specify the default image tag for all OpenSlides
-                       components (defaults.tag).
-    -O, --management-tool=[PATH|NAME|-]
-                       Specify the 'openslides' executable to use.  The program
-                       must be available in the management tool's versions
-                       directory [${MANAGEMENT_TOOL_BINDIR}/].
-                       If only a file NAME is given, it is assumed to be
-                       relative to that directory.
-                       The special string "-" indicates that the latest version
-                       is to be followed.
-    --local-only       Create an instance without setting up HAProxy and Let's
-                       Encrypt certificates.  Such an instance is only
-                       accessible on localhost, e.g., http://127.0.0.1:61000.
-    --no-add-account   Do not add an additional, customized local admin account
-    --clone-from       Create the new instance based on the specified existing
-                       instance
-
-  for autoscale:
-    --accounts=NUM     Specify the number of accounts to scale for overriding
-                       read from metadata.txt
-    --dry-run          Print out actions instead of actually performing them
 
 The ls output:
 
@@ -214,6 +200,57 @@ The ls output:
     - List of meetings: ID, name, dates, Jitsi configuration of each meeting
     - Users:            active/total/max. number of users
 EOF
+;;
+  start)
+    cat << EOF
+  for start:
+    -O, --management-tool=[PATH|NAME|-]
+                       Specify the 'openslides' executable to use.  The program
+                       must be available in the management tool's versions
+                       directory [${MANAGEMENT_TOOL_BINDIR}/].
+                       If only a file NAME is given, it is assumed to be
+                       relative to that directory.
+                       The special string "-" indicates that the latest version
+                       is to be followed.
+EOF
+;;
+  create | update)
+    cat << EOF
+
+  for add & update:
+    -t, --tag=TAG      Specify the default image tag for all OpenSlides
+                       components (defaults.tag).
+    -O, --management-tool=[PATH|NAME|-]
+                       Specify the 'openslides' executable to use.  The program
+                       must be available in the management tool's versions
+                       directory [${MANAGEMENT_TOOL_BINDIR}/].
+                       If only a file NAME is given, it is assumed to be
+                       relative to that directory.
+                       The special string "-" indicates that the latest version
+                       is to be followed.
+    --local-only       Create an instance without setting up HAProxy and Let's
+                       Encrypt certificates.  Such an instance is only
+                       accessible on localhost, e.g., http://127.0.0.1:61000.
+    --no-add-account   Do not add an additional, customized local admin account
+    --clone-from       Create the new instance based on the specified existing
+                       instance
+EOF
+;;
+  autoscale)
+    cat << EOF
+
+  for autoscale:
+    --accounts=NUM     Specify the number of accounts to scale for overriding
+                       read from metadata.txt
+    --dry-run          Print out actions instead of actually performing them
+EOF
+;;
+  *)
+    cat << EOF
+Use $ME help <action> for details.
+EOF
+;;
+esac
 }
 
 fatal() {
@@ -2020,7 +2057,7 @@ while true; do
       OPT_DRY_RUN=1
       shift 1
       ;;
-    -h|--help) usage; exit 0 ;;
+    -h|--help) USAGE=1; shift;;
     --) shift ; break ;;
     *) usage; exit 1 ;;
   esac
@@ -2029,6 +2066,10 @@ done
 # Parse commands
 for arg; do
   case $arg in
+    help)
+      USAGE=1
+      shift
+      ;;
     ls|list)
       [[ -z "$MODE" ]] || { usage; exit 2; }
       MODE=list
@@ -2077,6 +2118,11 @@ for arg; do
       ;;
   esac
 done
+
+if [[ "$USAGE" ]]; then
+  usage
+  exit 0
+fi
 
 # Use GNU parallel if found
 if [[ "$OPT_USE_PARALLEL" -ne 0 ]] && [[ -f /usr/bin/env_parallel.bash ]]; then
