@@ -872,15 +872,6 @@ ls_instance() {
   [[ -f "${instance}/${DCCONFIG_FILENAME}" ]] && [[ -f "${instance}/config.yml" ]] ||
     fatal "$shortname is not a $DEPLOYMENT_MODE instance."
 
-  # Check if access to the openslides management tool/service is available.  If
-  # not, some functions must be skipped.
-  select_management_tool # Configure the correct version for this instance
-  if mngmt_cmd=("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance")); then
-    HAS_MANAGEMENT_ACCESS=1
-    # Run an actual test query
-    "${mngmt_cmd[@]}" user --fields id 2>&1 >/dev/null || HAS_MANAGEMENT_ACCESS=
-  fi
-
   #  For stacks, get the normalized shortname
   PROJECT_STACK_NAME="$(value_from_config_yml "$instance" '.stackName')"
   [[ -z "${PROJECT_STACK_NAME}" ]] ||
@@ -906,6 +897,14 @@ ls_instance() {
       if [[ "$HAS_DOCKER_ACCESS" ]]; then
         version=$(currently_running_version)
       fi
+    fi
+    # Check if access to the openslides management tool/service is available.  If
+    # not, some functions must be skipped.
+    select_management_tool # Configure the correct version for this instance
+    if mngmt_cmd=("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance")); then
+      HAS_MANAGEMENT_ACCESS=1
+      # Run an actual test query
+      "${mngmt_cmd[@]}" user --fields id 2>&1 >/dev/null || HAS_MANAGEMENT_ACCESS=
     fi
   else
     # If we can not connect to the reverse proxy, the instance may have been
