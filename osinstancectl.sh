@@ -912,11 +912,15 @@ ls_instance() {
     version_from_image=$version
     if [[ -z "$OPT_FAST" ]]; then
       instance_health_status "$port" || sym=$SYM_ERROR
-      # version_from_image=$(fetch_instance_builtin_version "$port")
-      version_from_image=$(fetch_instance_builtin_version "$shortname")
       if [[ "$HAS_DOCKER_ACCESS" ]]; then
         version=$(currently_running_version)
+        if [[ "$OPT_LONGLIST" ]] || [[ "$OPT_JSON" ]]; then
+          # Additionally fetch the images own version string if needed;
+          # otherwise, avoid to reduce requests.
+          version_from_image=$(fetch_instance_builtin_version "$shortname")
+        fi
       else
+        version_from_image=$(fetch_instance_builtin_version "$shortname")
         version=$version_from_image
       fi
     fi
