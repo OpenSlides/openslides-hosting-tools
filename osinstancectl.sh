@@ -299,6 +299,8 @@ arg_check() {
       [[ "$HAS_DOCKER_ACCESS" ]] ||
         fatal "User $USER does not have access to the Docker daemon.  See \`docker info\`."
       ;;
+  esac
+  case "$MODE" in
     "start" | "stop" | "remove" | "erase" | "update" | "autoscale")
       [[ -d "$PROJECT_DIR" ]] || {
         fatal "Instance '${PROJECT_NAME}' not found."
@@ -307,11 +309,15 @@ arg_check() {
         fatal "Not a ${DEPLOYMENT_MODE} instance."
       }
       ;;
+  esac
+  case "$MODE" in
     "clone")
       [[ -d "$CLONE_FROM_DIR" ]] || {
         fatal "$CLONE_FROM_DIR does not exist."
       }
       ;;
+  esac
+  case "$MODE" in
     "create")
       [[ ! -d "$PROJECT_DIR" ]] || {
         fatal "Instance '${PROJECT_NAME}' already exists."
@@ -319,6 +325,12 @@ arg_check() {
       [[ ! -d "${OS3_INSTANCES}/${PROJECT_NAME}" ]] || {
         fatal "Instance '${PROJECT_NAME}' already exists as an OpenSlides 3 instance."
       }
+      ;;
+  esac
+  case "$MODE" in
+    "update")
+      [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] || [[ -n "$OPT_MANAGEMENT_TOOL" ]] ||
+        fatal "Update requires tag or management tool option"
       ;;
   esac
 }
@@ -2051,8 +2063,6 @@ for arg; do
     update)
       [[ -z "$MODE" ]] || { usage; exit 2; }
       MODE=update
-      [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] || [[ -n "$OPT_MANAGEMENT_TOOL" ]] ||
-        fatal "Update requires tag or management tool option"
       shift 1
       ;;
     autoscale)
