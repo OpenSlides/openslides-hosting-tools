@@ -1654,10 +1654,10 @@ autoscale_gather() {
 
   # fallback: autoscale everything to 1 if not configured otherwise
   [[ -n "$AUTOSCALE_ACCOUNTS_OVER" ]] ||
-    AUTOSCALE_ACCOUNTS_OVER[0]="auth=1 autoupdate=1 backend=1 backendManage=1 client=1 datastoreReader=1 datastoreWriter=1 icc=1 manage=1 media=1 proxy=1 redis=1 vote=1"
+    AUTOSCALE_ACCOUNTS_OVER[0]="auth=1 autoupdate=1 backendAction=1 backendPresenter=1 backendManage=1 client=1 datastoreReader=1 datastoreWriter=1 icc=1 manage=1 media=1 proxy=1 redis=1 vote=1"
 
   [[ -n "$AUTOSCALE_RESET_ACCOUNTS_OVER" ]] ||
-    AUTOSCALE_RESET_ACCOUNTS_OVER[0]="auth=1 autoupdate=1 backend=1 backendManage=1 client=1 datastoreReader=1 datastoreWriter=1 icc=1 manage=1 media=1 proxy=1 redis=1 vote=1"
+    AUTOSCALE_RESET_ACCOUNTS_OVER[0]="auth=1 autoupdate=1 backendAction=1 backendPresenter=1 backendManage=1 client=1 datastoreReader=1 datastoreWriter=1 icc=1 manage=1 media=1 proxy=1 redis=1 vote=1"
 
   # parse scale goals from configuration
   # make sure indices are in ascending order
