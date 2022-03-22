@@ -653,7 +653,8 @@ fetch_instance_builtin_version() {
   # Connect to OpenSlides and parse its version string
   #
   # This is a simple method to test the availability of the app.
-  LC_ALL=C curl -s "${CURL_OPTS[@]}" "http://127.0.0.1:${1}/assets/version.txt" ||
+  # LC_ALL=C curl -s "${CURL_OPTS[@]}" "http://127.0.0.1:${1}/assets/version.txt" ||
+  LC_ALL=C curl -s "${CURL_OPTS[@]}" "https://${1}/assets/version.txt" ||
     {
       echo 'unavailable'
       return 1
@@ -911,7 +912,8 @@ ls_instance() {
     version_from_image=$version
     if [[ -z "$OPT_FAST" ]]; then
       instance_health_status "$port" || sym=$SYM_ERROR
-      version_from_image=$(fetch_instance_builtin_version "$port")
+      # version_from_image=$(fetch_instance_builtin_version "$port")
+      version_from_image=$(fetch_instance_builtin_version "$shortname")
       if [[ "$HAS_DOCKER_ACCESS" ]]; then
         version=$(currently_running_version)
       else
