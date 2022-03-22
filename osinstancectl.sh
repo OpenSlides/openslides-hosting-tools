@@ -175,7 +175,7 @@ Options:
                        instance
 
   for autoscale:
-    --accounts=NUM     Specify the number of acoounts to scale for overriding
+    --accounts=NUM     Specify the number of accounts to scale for overriding
                        read from metadata.txt
     --dry-run          Print out actions instead of actually performing them
 
@@ -191,12 +191,23 @@ The ls output:
     gray               The instance has been stopped
 
   Version information in ls mode:
-    The listed version is the containers' Docker image tag currently in use.
-    Normally, this is a single tag.  In case there is more than one tag in use,
-    the display format is extended to include more detail.  It lists each tag
-    with the number of containers running this tag, separated by slashes, as
-    well as a final sum of the number of different registries and tags in
-    square brackets, e.g., "[1:2]".
+    Both the instances own version string (simple) as well as the container
+    image versions (complex) can be displayed.  The available information
+    depends on the user's access permissions to Docker.
+
+    - Complex: This version is based on the Docker image versions actually in
+      use.  Normally, this is a single tag; however, in case there is more than
+      one tag in use, the display format is extended to include more detail.
+      It lists each tag with the number of containers running this tag,
+      separated by slashes, as well as a final sum of the number of different
+      registries and tags in square brackets, e.g., "[1:2]".  In the --long
+      output format this version is listed as "Version".  If available, it
+      takes precedence over the simple version string and is used for the
+      compact ls output.
+    - Simple:  This version simply reports the version string that has been
+      built into the image.  It is available under most circumstances.  In the
+      --long output format, it is listed as "Version (image)" (and also as
+      "Version" if the complex version string is unavailable).
 
   Stats in ls mode:
     - Meetings:         active/max. number of meetings
