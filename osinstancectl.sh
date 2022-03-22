@@ -649,6 +649,17 @@ instance_has_services_running() {
   esac
 }
 
+fetch_instance_builtin_version() {
+  # Connect to OpenSlides and parse its version string
+  #
+  # This is a simple method to test the availability of the app.
+  LC_ALL=C curl -s "${CURL_OPTS[@]}" "http://127.0.0.1:${1}/assets/version.txt" ||
+    {
+      echo 'unavailable'
+      return 1
+    }
+}
+
 currently_running_version() {
   # Retrieve the OpenSlides image tags actually in use.
   case "$DEPLOYMENT_MODE" in
@@ -897,10 +908,14 @@ ls_instance() {
     sym="$SYM_NORMAL"
     instance_is_running=1
     version="[skipped]"
+    version_from_image=$version
     if [[ -z "$OPT_FAST" ]]; then
       instance_health_status "$port" || sym=$SYM_ERROR
+      version_from_image=$(fetch_instance_builtin_version "$port")
       if [[ "$HAS_DOCKER_ACCESS" ]]; then
         version=$(currently_running_version)
+      else
+        version=$version_from_image
       fi
     fi
     # Check if access to the openslides management tool/service is available.  If
@@ -915,6 +930,7 @@ ls_instance() {
     # If we can not connect to the reverse proxy, the instance may have been
     # stopped on purpose or there is a problem
     version=
+    version_from_image=
     sym="$SYM_STOPPED"
     instance_is_running=0
     if [[ "$HAS_DOCKER_ACCESS" ]] && [[ -z "$OPT_FAST" ]] &&
@@ -1106,6 +1122,7 @@ ls_instance() {
         --arg     "stackname"       "$normalized_shortname"             \
         --arg     "directory"       "$instance"                         \
         --arg     "version"         "$version"                          \
+        --arg     "version_image"   "$version_from_image"               \
         --arg     "instance"        "$instance"                         \
         --arg     "status"          "$sym"                              \
         --argjson "port"            "$port"                             \
@@ -1127,13 +1144,14 @@ ls_instance() {
         $jq_image_version_args \
         $jq_service_scaling_args \
         "{
-          name:       \$shortname,
-          stackname:  \$stackname,
-          directory:  \$instance,
-          version:    \$version,
-          status:     \$status,
-          port:       \$port,
-          superadmin: \$superadmin,
+          name:          \$shortname,
+          stackname:     \$stackname,
+          directory:     \$instance,
+          version:       \$version,
+          version_image: \$version_image,
+          status:        \$status,
+          port:          \$port,
+          superadmin:    \$superadmin,
           user: {
             user_name:    \$user_name,
             user_password: \$user_password,
@@ -1198,6 +1216,7 @@ ls_instance() {
     fi
     treefmt node "Local port" "$port"
     treefmt node "Version" "$version"
+    treefmt node "Version (image)" "$version_from_image"
   fi
 
   # --services
