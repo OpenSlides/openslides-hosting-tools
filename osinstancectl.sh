@@ -2182,6 +2182,8 @@ case "$MODE" in
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
     select_management_tool
+    append_metadata "$PROJECT_DIR" \
+      "$(date +"%F %H:%M"): Starting with manage=$MANAGEMENT_TOOL_HASH"
     instance_start
     run_hook "post-${MODE}"
     ;;
@@ -2209,6 +2211,8 @@ case "$MODE" in
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
     select_management_tool
+    append_metadata "$PROJECT_DIR" \
+      "$(date +"%F %H:%M"): Update using manage=$MANAGEMENT_TOOL_HASH"
     run_hook "pre-${MODE}"
     instance_update
     run_hook "post-${MODE}"
