@@ -206,16 +206,21 @@ EOF
 }
 
 fatal() {
-    echo 1>&2 "${COL_RED}ERROR${COL_NORMAL}: $*"
-    exit 23
+  echo 1>&2 "${COL_RED}ERROR${COL_NORMAL}: $*"
+  exit 23
 }
 
 warn() {
-    echo 1>&2 "${COL_RED}WARN${COL_NORMAL}: $*"
+  echo 1>&2 "${COL_RED}WARN${COL_NORMAL}: $*"
 }
 
 info() {
-    echo 1>&2 "${COL_GREEN}INFO${COL_NORMAL}: $*"
+  echo 1>&2 "${COL_GREEN}INFO${COL_NORMAL}: $*"
+}
+
+tag_output() {
+  local prefix=${1:-EXT}
+  stdbuf -oL sed "s/^/${COL_YELLOW}${prefix}${COL_NORMAL}: /"
 }
 
 clean_up() {
@@ -418,7 +423,8 @@ recreate_compose_yml() {
   [[ -z "$CONFIG_YML_TEMPLATE" ]] ||
     config="--config=${CONFIG_YML_TEMPLATE}"
   "${MANAGEMENT_TOOL}" config $template $config \
-    --config="${PROJECT_DIR}/config.yml" "${PROJECT_DIR}"
+    --config="${PROJECT_DIR}/config.yml" "${PROJECT_DIR}" |&
+    tag_output manage
 }
 
 openslides_connect_opts() {
@@ -530,7 +536,7 @@ create_instance_dir() {
   [[ -z "$CONFIG_YML_TEMPLATE" ]] ||
     config="--config=${CONFIG_YML_TEMPLATE}"
 
-  "${MANAGEMENT_TOOL}" setup $template $config "$PROJECT_DIR" ||
+  "${MANAGEMENT_TOOL}" setup $template $config "$PROJECT_DIR" |& tag_output manage ||
     fatal "Error during \`"${MANAGEMENT_TOOL}" setup\`"
   touch "${PROJECT_DIR}/${MARKER}"
 
@@ -1456,7 +1462,8 @@ instance_setup_initialdata() {
   while :; do
     echo "Waiting for datastore to load initial data."
     {
-      "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts "$PROJECT_DIR")
+      "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts "$PROJECT_DIR") |&
+        tag_output manage
       ec=$?
     } || :
     # Check initial-data success
@@ -1476,7 +1483,7 @@ instance_setup_user() {
   local secret="${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
   if [[ -r "${secret}.setup" ]]; then
     "${MANAGEMENT_TOOL}" create-user $(openslides_connect_opts "$PROJECT_DIR") \
-      -f "${secret}.setup"
+      -f "${secret}.setup" |& tag_output manage
     mv "${secret}.setup" "$secret"
   fi
 }
@@ -1488,7 +1495,7 @@ instance_setup_organization() {
   if [[ -r "${file}.setup" ]]; then
     # XXX: The syntax of `openslides set` might change in the future
     "${MANAGEMENT_TOOL}" set $(openslides_connect_opts "$PROJECT_DIR") organization \
-      -f "${file}.setup"
+      -f "${file}.setup" |& tag_output manage
     mv "${file}.setup" "$file"
   fi
 }
@@ -1499,7 +1506,8 @@ instance_start() {
   case "$DEPLOYMENT_MODE" in
     "stack")
       PROJECT_STACK_NAME="$(value_from_config_yml "$PROJECT_DIR" '.stackName')"
-      docker stack deploy -c "$DCCONFIG" "$PROJECT_STACK_NAME"
+      docker stack deploy -c "$DCCONFIG" "$PROJECT_STACK_NAME" |&
+        tag_output "$DEPLOYMENT_MODE"
       ;;
   esac
   [[ "$MODE" == "update" ]] || {
@@ -1512,7 +1520,7 @@ instance_start() {
 instance_stop() {
   case "$DEPLOYMENT_MODE" in
     "stack")
-      docker stack rm "$PROJECT_STACK_NAME"
+      docker stack rm "$PROJECT_STACK_NAME" |& tag_output "$DEPLOYMENT_MODE"
     ;;
 esac
 }
