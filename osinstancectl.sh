@@ -615,7 +615,6 @@ remove() {
   rm -rf "${PROJECT_DIR}"
   echo "remove HAProxy config..."
   rm_from_haproxy_cfg
-  echo "Done."
 }
 
 ping_instance_simple() {
@@ -1454,13 +1453,23 @@ ask_start() {
 instance_setup_initialdata() {
   # Run setup steps that require the instance to be running
   local PORT=$(value_from_config_yml "$PROJECT_DIR" '.port')
-  echo "Waiting for instance to become ready."
+  local max_progress_length=30
+  local wait_count=0
+  printf "Waiting for instance to become ready."
   until instance_health_status "$PORT"; do
+    wait_count=$((wait_count + 1))
     sleep 5
+    # Append periods unless the line is getting too long.
+    if [[ $wait_count -lt $max_progress_length ]]; then
+      printf .
+    elif [[ $wait_count -eq $max_progress_length ]]; then
+      printf ' [truncated]'
+    fi
   done
+  printf ' done.\n'
   local ec=
+  echo "Waiting for management tool to load initial data."
   while :; do
-    echo "Waiting for datastore to load initial data."
     {
       "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts "$PROJECT_DIR") |&
         tag_output manage
@@ -1587,7 +1596,7 @@ instance_update() {
   }
 
   instance_has_services_running "$PROJECT_STACK_NAME" || {
-    warn "${PROJECT_NAME} is not running."
+    info "${PROJECT_NAME} is not running."
     echo "      The configuration has been updated and the instance will" \
          "be upgraded upon its next start."
     return 0
@@ -1762,7 +1771,7 @@ instance_autoscale() {
   log_scale
 }
 
-run_hook() (
+run_hook() {
   local hook hook_name
   [[ -d "$HOOKS_DIR" ]] || return 0
   hook_name="$1"
@@ -1770,12 +1779,13 @@ run_hook() (
   shift
   if [[ -x "$hook" ]]; then
     cd "$PROJECT_DIR"
-    info "Running $hook_name hook..."
+    echo "Running $hook_name hook..."
     set +eu
-    . "$hook"
+    (. "$hook")
     set -eu
+    echo "End of $hook_name hook."
   fi
-  )
+}
 
 trap clean_up EXIT
 
@@ -2110,6 +2120,7 @@ case "$MODE" in
     [[ "$ANS" = "YES" ]] || exit 0
     run_hook "pre-${MODE}"
     remove "$PROJECT_NAME"
+    echo "Done."
     ;;
   create)
     create_and_check_pid_file
@@ -2149,6 +2160,7 @@ case "$MODE" in
     #  fi
     #fi
     ask_start || true
+    echo "Done."
     ;;
   clone)
     create_and_check_pid_file
@@ -2173,6 +2185,7 @@ case "$MODE" in
     add_to_haproxy_cfg
     run_hook "post-${MODE}"
     ask_start || true
+    echo "Done."
     ;;
   list)
     [[ -z "$OPT_PRECISE_PROJECT_NAME" ]] || PROJECT_NAME="^${PROJECT_NAME}$"
@@ -2186,12 +2199,14 @@ case "$MODE" in
       "$(date +"%F %H:%M"): Starting with manage=$MANAGEMENT_TOOL_HASH"
     instance_start
     run_hook "post-${MODE}"
+    echo "Done."
     ;;
   stop)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
     instance_stop
     run_hook "post-${MODE}"
+    echo "Done."
     ;;
   erase)
     create_and_check_pid_file
@@ -2206,6 +2221,7 @@ case "$MODE" in
     read -rp "Really delete? (uppercase YES to confirm) " ANS
     [[ "$ANS" = "YES" ]] || exit 0
     instance_erase
+    echo "Done."
     ;;
   update)
     create_and_check_pid_file
@@ -2216,12 +2232,14 @@ case "$MODE" in
     run_hook "pre-${MODE}"
     instance_update
     run_hook "post-${MODE}"
+    echo "Done."
     ;;
   autoscale)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
     select_management_tool
     instance_autoscale
+    echo "Done."
     ;;
   *)
     fatal "Missing command.  Please consult $ME --help."
