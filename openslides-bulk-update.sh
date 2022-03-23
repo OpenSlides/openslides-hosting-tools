@@ -18,19 +18,27 @@ INSTANCES=()
 UPDATE_ERRORS=()
 PATTERN=
 TAG=
+OPT_MANAGEMENT_TOOL=
 ME="$(basename -s .sh "${BASH_SOURCE[0]}")"
 MIN_WIDTH=64
 DEFAULT_OPT_JOBS=3
 
 usage() {
 cat << EOF
-Usage: $ME [<options>] --tag=<tag> < <instances in JSON format>
+Usage: $ME --tag=<tag> --management-tool=<tool> [<options>] < <instances in JSON format>
 
-  -t TAG, --tag=TAG     Docker image tag to which to update
-  -j JOBS, --jobs=JOBS  Configure the number of jobs to run in parallel
-                        (default: $DEFAULT_OPT_JOBS)
-  --tmux                Display jobs in tmux windows
-  --tmuxpanes           Display jobs in tmux panes
+Required parameters:
+  -t TAG, --tag=TAG       Docker image tag to which to update
+  -O TOOL,
+  --management-tool=TOOL  Specify the management tool version to use.  This
+                          option is passed through to $OSCTL, so see
+                          \`$OSCTL help update\` for details.
+
+Optional parameters:
+  -j JOBS, --jobs=JOBS    Configure the number of jobs to run in parallel
+                          (default: $DEFAULT_OPT_JOBS)
+  --tmux                  Display jobs in tmux windows
+  --tmuxpanes             Display jobs in tmux panes
 
 $ME expects the output of "os4instancectl ls --json" on its standard input.
 
@@ -71,8 +79,8 @@ instance_menu() {
     3>&2 2>&1 1>&3
 }
 
-shortopt="ht:j:"
-longopt="help,tag:,jobs:,tmux,tmuxpanes"
+shortopt="ht:O:j:"
+longopt="help,tag:,management-tool:,jobs:,tmux,tmuxpanes"
 ARGS=$(getopt -o "$shortopt" -l "$longopt" -n "$ME" -- "$@")
 if [ $? -ne 0 ]; then usage; exit 1; fi
 eval set -- "$ARGS"
@@ -82,6 +90,10 @@ while true; do
   case "$1" in
     -t | --tag)
       TAG="$2"
+      shift 2
+      ;;
+    -O | --management-tool)
+      OPT_MANAGEMENT_TOOL="$2"
       shift 2
       ;;
     -j | --jobs)
@@ -120,6 +132,9 @@ done
 parallel -V 2>&1 >/dev/null || fatal "GNU parallel not found."
 # Verify options
 [[ -n "$TAG" ]] || { fatal "Missing option: --tag"; }
+[[ -n "$OPT_MANAGEMENT_TOOL" ]] ||
+  fatal "You have not specified the OpenSlides management tool version" \
+    "(--management-tool)."
 
 mkdir -p /var/log/openslides-bulk-update
 PARALLEL_RESULT_DIR="$(mktemp -d --tmpdir=/var/log/openslides-bulk-update $(date -I).XXX)" || exit 23
@@ -175,7 +190,9 @@ fi
 parallel --no-run-if-empty --tag --bar \
     --joblog "$PARALLEL_JOBLOG" --result "$PARALLEL_RESULT_DIR" \
     --delay 0.5 --jobs=${OPT_PARALLEL_JOBS:=$DEFAULT_OPT_JOBS} $OPT_PARALLEL_TMUX \
-  "$OSCTL" --no-pid-file --tag="$TAG" update '{}' ::: "${INSTANCES[@]}" || ec=$?
+  "$OSCTL" --no-pid-file --color=never \
+    --tag="$TAG" --management-tool="$OPT_MANAGEMENT_TOOL" \
+    update '{}' ::: "${INSTANCES[@]}" || ec=$?
 if [[ $ec -ne 0 ]]; then
   echo
   echo "ERRORS ENCOUNTERED! ($PARALLEL_JOBLOG):"
