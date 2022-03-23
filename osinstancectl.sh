@@ -979,8 +979,8 @@ ls_instance() {
     service_versions[management-tool]=$(value_from_config_yml "$instance" '.managementToolHash') || true
 
     # Get service scalings
-    if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]] &&
-          [[ "$HAS_DOCKER_ACCESS" ]] && [[ "$HAS_MANAGEMENT_ACCESS" ]]
+    if [[ -z "$OPT_FAST" ]] || [[ -n "$OPT_JSON" ]] && [[ "$instance_is_running" -eq 1 ]] &&
+        [[ "$HAS_DOCKER_ACCESS" ]] && [[ "$HAS_MANAGEMENT_ACCESS" ]]
     then
       autoscale_gather "$instance" || true
     fi
@@ -1085,15 +1085,13 @@ ls_instance() {
       done
     )
     local jq_service_scaling_args=$(
-      if [[ -z "$OPT_FAST" ]] && [[ "$instance_is_running" -eq 1 ]]; then
-        for s in "${!SCALE_RUNNING[@]}"; do
-          v_current=${SCALE_RUNNING[$s]}
-          v_target=${SCALE_TO[$s]}
-          s=$(echo "$s" | tr - _)
-          printf -- '--arg %s_scale_current %s\n' "$s" "$v_current"
-          printf -- '--arg %s_scale_target %s\n' "$s" "$v_target"
-        done
-      fi
+      for s in "${!service_versions[@]}"; do
+        v_current=${SCALE_RUNNING[$s]:=null}
+        v_target=${SCALE_TO[$s]:=null}
+        s=$(echo "$s" | tr - _)
+        printf -- '--arg %s_scale_current %s\n' "$s" "$v_current"
+        printf -- '--argjson %s_scale_target %s\n' "$s" "$v_target"
+      done
     )
 
     # Create a custom JSON object and merge it with the meetings information
@@ -1153,14 +1151,14 @@ ls_instance() {
                 accounts_today: \$misc_accounts_today,
               },
               current: {
-                $(for s in ${!SCALE_RUNNING[@]}; do
-                  printf '"%s": $%s_scale_current,\n' $s ${s} |
+                $(for s in "${!service_versions[@]}"; do
+                  printf '"%s": $%s_scale_current,\n' $s $s |
                   tr - _ # dashes not allowed in keys
                 done | sort)
               },
               target: {
-                $(for s in ${!SCALE_TO[@]}; do
-                  printf '"%s": $%s_scale_target,\n' $s ${s} |
+                $(for s in "${!service_versions[@]}"; do
+                  printf '"%s": $%s_scale_target,\n' $s $s |
                   tr - _ # dashes not allowed in keys
                 done | sort)
               }
@@ -1654,10 +1652,10 @@ autoscale_gather() {
 
   # fallback: autoscale everything to 1 if not configured otherwise
   [[ -n "$AUTOSCALE_ACCOUNTS_OVER" ]] ||
-    AUTOSCALE_ACCOUNTS_OVER[0]="auth=1 autoupdate=1 backendAction=1 backendPresenter=1 backendManage=1 client=1 datastoreReader=1 datastoreWriter=1 icc=1 manage=1 media=1 proxy=1 redis=1 vote=1"
+    AUTOSCALE_ACCOUNTS_OVER[0]="auth=1 autoupdate=1 backend=1 backendAction=1 backendPresenter=1 backendManage=1 client=1 datastoreReader=1 datastoreWriter=1 icc=1 manage=1 media=1 proxy=1 redis=1 vote=1"
 
   [[ -n "$AUTOSCALE_RESET_ACCOUNTS_OVER" ]] ||
-    AUTOSCALE_RESET_ACCOUNTS_OVER[0]="auth=1 autoupdate=1 backendAction=1 backendPresenter=1 backendManage=1 client=1 datastoreReader=1 datastoreWriter=1 icc=1 manage=1 media=1 proxy=1 redis=1 vote=1"
+    AUTOSCALE_RESET_ACCOUNTS_OVER[0]="auth=1 autoupdate=1 backend=1 backendAction=1 backendPresenter=1 backendManage=1 client=1 datastoreReader=1 datastoreWriter=1 icc=1 manage=1 media=1 proxy=1 redis=1 vote=1"
 
   # parse scale goals from configuration
   # make sure indices are in ascending order
