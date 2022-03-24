@@ -980,17 +980,20 @@ ls_instance() {
     version="[skipped]"
     version_from_image=$version
     if [[ -z "$OPT_FAST" ]]; then
-      instance_health_status "$port" || sym=$SYM_ERROR
-      if [[ "$HAS_DOCKER_ACCESS" ]]; then
-        version=$(currently_running_version)
-        if [[ "$OPT_LONGLIST" ]] || [[ "$OPT_JSON" ]]; then
-          # Additionally fetch the images own version string if needed;
-          # otherwise, avoid to reduce requests.
-          version_from_image=$(fetch_instance_builtin_version "$shortname")
+      if instance_health_status "$port"; then
+        if [[ "$HAS_DOCKER_ACCESS" ]]; then
+          version=$(currently_running_version)
+          if [[ "$OPT_LONGLIST" ]] || [[ "$OPT_JSON" ]]; then
+            # Additionally fetch the images own version string if needed;
+            # otherwise, avoid to reduce requests.
+            version_from_image=$(fetch_instance_builtin_version "$shortname") || true
+          fi
+        else
+          version_from_image=$(fetch_instance_builtin_version "$shortname") || true
+          version=$version_from_image
         fi
       else
-        version_from_image=$(fetch_instance_builtin_version "$shortname")
-        version=$version_from_image
+        sym=$SYM_ERROR
       fi
     fi
     # Check if access to the openslides management tool/service is available.  If
