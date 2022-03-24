@@ -26,6 +26,10 @@ YAML_TEMPLATE= # leave empty for automatic (default)
 DOT_ENV_TEMPLATE=
 HOOKS_DIR=
 
+# OpenSlides 4 instances path
+OS4_INSTANCES="${OSDIR}/os4-instances"
+
+
 ME=$(basename -s .sh "${BASH_SOURCE[0]}")
 CONFIG="/etc/osinstancectl"
 PIDFILE="/tmp/osinstancectl.pid"
@@ -275,6 +279,9 @@ arg_check() {
       [[ ! -d "$PROJECT_DIR" ]] || {
         fatal "Instance '${PROJECT_NAME}' already exists."
       }
+      [[ ! -d "${OS4_INSTANCES}/${PROJECT_NAME}" ]] || {
+        fatal "Instance '${PROJECT_NAME}' already exists as an OpenSlides 4 instance."
+      }
       ;;
   esac
   echo "$DOCKER_IMAGE_REGISTRY_OPENSLIDES" \
@@ -321,9 +328,16 @@ next_free_port() {
   local HIGHEST_PORT_IN_USE
   local PORT
   HIGHEST_PORT_IN_USE=$(
-    find "${INSTANCES}" -type f -name ".env" -print0 |
-    xargs -0 grep -h "EXTERNAL_HTTP_PORT" |
-    cut -d= -f2 | tr -d "[\"\']" | sort -rn | head -1
+    {
+      find "${INSTANCES}" -type f -name ".env" -print0 |
+      xargs -0 --no-run-if-empty grep -h "EXTERNAL_HTTP_PORT" |
+      cut -d= -f2 | tr -d \"\'
+      if [[ "${OS4_INSTANCES}" ]]; then
+        # OpenSlides 4 instance ports
+        find "${OS4_INSTANCES}" -type f -name "config.yml" -print0 |
+        xargs -0 --no-run-if-empty yq --no-doc eval '.port'
+      fi
+    } | sort -rn | head -1
   )
   [[ -n "$HIGHEST_PORT_IN_USE" ]] || HIGHEST_PORT_IN_USE=61000
   PORT=$((HIGHEST_PORT_IN_USE + 1))
@@ -1807,6 +1821,7 @@ DEPS=(
   m4
   nc
 )
+[[ ! -d "$OS4_INSTANCES" ]] || DEPS+=(yq)
 case "$DEPLOYMENT_MODE" in
   "compose")
     DEPS+=(docker-compose)
