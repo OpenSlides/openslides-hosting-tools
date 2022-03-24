@@ -1686,10 +1686,12 @@ instance_update() {
     if [[ "$OPT_MANAGEMENT_TOOL" = '-' ]]; then
       cfg_hash='-'
     fi
+    local metadata_string="$(date +"%F %H:%M"): Updated management tool to $cfg_hash"
     update_config_yml "${PROJECT_DIR}/config.yml" \
       ".managementToolHash = \"$cfg_hash\""
-    append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"):" \
-      "Updated management tool to" "${cfg_hash} ($MANAGEMENT_TOOL_HASH)"
+    [[ "$cfg_hash" == "$MANAGEMENT_TOOL_HASH" ]] ||
+      metadata_string+=" ($MANAGEMENT_TOOL_HASH)"
+    append_metadata "$PROJECT_DIR" "$metadata_string"
   }
 
   instance_has_services_running "$PROJECT_STACK_NAME" || {

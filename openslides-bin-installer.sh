@@ -71,10 +71,10 @@ prereq_check() {
 
 install_version(){
   # Install the binary under its own hash
-  echo "Installing as $LATEST."
+  echo "Installing as $LATEST"
   install -m 755 "$TEMPFILE" "$LATEST"
   [[ "$OPT_LINK" -eq 0 ]] || {
-    echo "Linking as ${BINDIR}/versions/latest."
+    echo "Linking as ${BINDIR}/versions/latest"
     ln -sf "$HASH" "${BINDIR}/versions/latest"
   }
 }
