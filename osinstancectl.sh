@@ -1680,8 +1680,8 @@ instance_update() {
   # complex configurations, e.g., service-specific tag overrides, can not be
   # updated automatically.  In these cases, require --force.
   #
-  if [[ $(yq eval '.services.*.tag' "${PROJECT_DIR}/config.yml" | wc -l) -ne 1 ]] &&
-      [[ "$OPT_FORCE" -ne 1 ]]
+  if yq eval --exit-status '.services.*.tag' \
+      "${PROJECT_DIR}/config.yml" >/dev/null 2>&1 && [[ "$OPT_FORCE" -ne 1 ]]
   then
     fatal "Custom service tags found which cannot be updated automatically! " \
       "Refusing update.  (Use --force to update the default tag anyway.)"
@@ -1689,8 +1689,8 @@ instance_update() {
   # Equally, it would be a concern if there were images from more than one
   # registry in use.  For simplicity's sake, consider any explicitly configured
   # registries a problem.
-  if [[ $(yq eval '.services.*.containerRegistry' "${PROJECT_DIR}/config.yml" | wc -l) -ne 1 ]] &&
-      [[ "$OPT_FORCE" -ne 1 ]]
+  if yq eval --exit-status '.services.*.containerRegistry' \
+      "${PROJECT_DIR}/config.yml" >/dev/null 2>&1 && [[ "$OPT_FORCE" -ne 1 ]]
   then
     fatal "Custom service containerRegistry found. " \
       "Refusing update.  (Use --force to update the default tag anyway.)"
