@@ -23,7 +23,6 @@ COMPOSE_TEMPLATE=
 CONFIG_YML_TEMPLATE=
 HOOKS_DIR=
 MANAGEMENT_TOOL_BINDIR="/usr/local/lib/openslides-manage/versions"
-MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/latest"
 
 # Legacy instances path
 OS3_INSTANCES="/srv/openslides/docker-instances"
@@ -32,6 +31,8 @@ ME=$(basename -s .sh "${BASH_SOURCE[0]}")
 CONFIG="/etc/os4instancectl"
 PIDFILE="/tmp/osinstancectl.pid"
 MARKER=".osinstancectl-marker"
+DEFAULT_MANAGEMENT_VERSION=latest
+MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${DEFAULT_MANAGEMENT_VERSION}"
 PROJECT_NAME=
 PROJECT_DIR=
 PROJECT_STACK_NAME=
@@ -205,14 +206,17 @@ EOF
   start)
     cat << EOF
   for start:
-    -O, --management-tool=[PATH|NAME|-]
+    -O, --management-tool=[PATH|NAME|*|-]
                        Specify the 'openslides' executable to use.  The program
                        must be available in the management tool's versions
                        directory [${MANAGEMENT_TOOL_BINDIR}/].
                        If only a file NAME is given, it is assumed to be
                        relative to that directory.
-                       The special string "-" indicates that the latest version
-                       is to be followed.
+                       The special string "*" indicates that no version is to
+                       be recorded which will always cause the latest version
+                       to be selected.  The special string "-" indicates that
+                       the version is to remain unchanged.
+                       [Default: ${DEFAULT_MANAGEMENT_VERSION}]
 EOF
 ;;
   create | update)
@@ -221,14 +225,17 @@ EOF
   for add & update:
     -t, --tag=TAG      Specify the default image tag for all OpenSlides
                        components (defaults.tag).
-    -O, --management-tool=[PATH|NAME|-]
+    -O, --management-tool=[PATH|NAME|*|-]
                        Specify the 'openslides' executable to use.  The program
                        must be available in the management tool's versions
                        directory [${MANAGEMENT_TOOL_BINDIR}/].
                        If only a file NAME is given, it is assumed to be
                        relative to that directory.
-                       The special string "-" indicates that the latest version
-                       is to be followed.
+                       The special string "*" indicates that no version is to
+                       be recorded which will always cause the latest version
+                       to be selected.  The special string "-" indicates that
+                       the version is to remain unchanged.
+                       [Default: ${DEFAULT_MANAGEMENT_VERSION}]
     --local-only       Create an instance without setting up HAProxy and Let's
                        Encrypt certificates.  Such an instance is only
                        accessible on localhost, e.g., http://127.0.0.1:61000.
@@ -365,8 +372,8 @@ arg_check() {
   esac
   case "$MODE" in
     "update")
-      [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] || [[ -n "$OPT_MANAGEMENT_TOOL" ]] ||
-        fatal "Update requires tag or management tool option"
+      [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] && [[ -n "$OPT_MANAGEMENT_TOOL" ]] ||
+        fatal "Update requires both the --tag and --management-tool options."
       ;;
   esac
 }
@@ -399,11 +406,29 @@ hash_management_tool() {
 select_management_tool() {
   # Read the required management tool version from the instance's config file
   # or use the version provided on the command line.
+  local pdir
+  # Find/configure the correct instance directory
+  if [[ $# -eq 0 ]]; then
+    pdir=$PROJECT_DIR
+  elif [[ $# -eq 1 ]]; then
+    pdir=$1
+  else
+    fatal "Wrong number of argumnts for select_management_tool()"
+  fi
+  MANAGEMENT_TOOL_HASH=
   if [[ -n "$OPT_MANAGEMENT_TOOL" ]]; then
-    # The given argument is the special string "-", indicating that the latest
-    # version should be followed
+    # The given argument is the special string "-", indicating that the version
+    # should remain unchanged
     if [[ "$OPT_MANAGEMENT_TOOL" = '-' ]]; then
-      MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/latest"
+      MANAGEMENT_TOOL_HASH=$(value_from_config_yml "$pdir" '.managementToolHash')
+      # Resolve the '*' to latest
+      [[ "$MANAGEMENT_TOOL_HASH" != '*' ]] ||
+        MANAGEMENT_TOOL_HASH="$DEFAULT_MANAGEMENT_VERSION"
+      MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${MANAGEMENT_TOOL_HASH}"
+    # The given argument is the special string "*", indicating that the latest
+    # version should be followed
+    elif [[ "$OPT_MANAGEMENT_TOOL" = '*' ]]; then
+      MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${DEFAULT_MANAGEMENT_VERSION}"
     elif [[ "$OPT_MANAGEMENT_TOOL" =~ \/ ]]; then
       # The given argument is a path
       MANAGEMENT_TOOL=$(realpath "$OPT_MANAGEMENT_TOOL")
@@ -412,9 +437,9 @@ select_management_tool() {
       MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${OPT_MANAGEMENT_TOOL}"
     fi
   # Reading tool version from instance configuration
-  elif MANAGEMENT_TOOL_HASH=$(value_from_config_yml "$PROJECT_DIR" '.managementToolHash'); then
+  elif MANAGEMENT_TOOL_HASH=$(value_from_config_yml "$pdir" '.managementToolHash'); then
     # Version is set to simply follow latest
-    if [[ "$MANAGEMENT_TOOL_HASH" = '-' ]]; then
+    if [[ "$MANAGEMENT_TOOL_HASH" = '*' ]]; then
       MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/latest"
     # Version is configured to a specific hash
     else
@@ -618,8 +643,8 @@ create_instance_dir() {
   mkdir "${PROJECT_DIR}/setup/"
 
   # Note which version of the openslides tool is compatible with the instance,
-  # unless special string "-" is given
-  if [[ "$OPT_MANAGEMENT_TOOL" = '-' ]]; then
+  # unless special string "*" is given
+  if [[ "$OPT_MANAGEMENT_TOOL" = '*' ]]; then
     update_config_yml "${PROJECT_DIR}/config.yml" ".managementToolHash = \"$OPT_MANAGEMENT_TOOL\""
   else
     update_config_yml "${PROJECT_DIR}/config.yml" ".managementToolHash = \"$MANAGEMENT_TOOL_HASH\""
@@ -998,7 +1023,7 @@ ls_instance() {
     fi
     # Check if access to the openslides management tool/service is available.  If
     # not, some functions must be skipped.
-    select_management_tool # Configure the correct version for this instance
+    select_management_tool "$instance" # Configure the correct version for this instance
     if mngmt_cmd=("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance")); then
       HAS_MANAGEMENT_ACCESS=1
       # Run an actual test query
@@ -1672,19 +1697,17 @@ instance_update() {
   fi
 
   # Update values in config.yml
-  [[ -z "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] || {
-    update_config_yml "${PROJECT_DIR}/config.yml" \
-      ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
-    update_config_services_db_connect_params
-    recreate_compose_yml
-    append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated all services to" "${DOCKER_IMAGE_TAG_OPENSLIDES}"
-  }
+  update_config_yml "${PROJECT_DIR}/config.yml" \
+    ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
+  update_config_services_db_connect_params
+  recreate_compose_yml
+  append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated all services to" "${DOCKER_IMAGE_TAG_OPENSLIDES}"
 
   # Update management tool hash if requested
-  [[ -z "$OPT_MANAGEMENT_TOOL" ]] || {
+  [[ "$OPT_MANAGEMENT_TOOL" = '-' ]] || {
     local cfg_hash=$MANAGEMENT_TOOL_HASH
-    if [[ "$OPT_MANAGEMENT_TOOL" = '-' ]]; then
-      cfg_hash='-'
+    if [[ "$OPT_MANAGEMENT_TOOL" = '*' ]]; then
+      cfg_hash='*'
     fi
     local metadata_string="$(date +"%F %H:%M"): Updated management tool to $cfg_hash"
     update_config_yml "${PROJECT_DIR}/config.yml" \
@@ -2239,7 +2262,7 @@ case "$MODE" in
     echo "Creating new instance: $PROJECT_NAME"
     # If not specified, set management tool to "-", i.e., track the latest
     # version
-    [[ -n "$OPT_MANAGEMENT_TOOL" ]] || OPT_MANAGEMENT_TOOL="-"
+    [[ -n "$OPT_MANAGEMENT_TOOL" ]] || OPT_MANAGEMENT_TOOL=$DEFAULT_MANAGEMENT_VERSION
     query_user_account_name
     select_management_tool
     PORT=$(next_free_port)
