@@ -1703,6 +1703,10 @@ instance_update() {
 
   # For already running instances, recreate containers with new versions
   instance_start
+
+  info "The update may require data migrations.  Migrations have not been" \
+    "implemented in the OpenSlides management tool and service yet, so you must" \
+    "do so manually."
 }
 
 autoscale_gather() {
