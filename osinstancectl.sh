@@ -2260,16 +2260,6 @@ case "$MODE" in
         append_metadata "$PROJECT_DIR" "No HAProxy config added (--local-only)"
       add_to_haproxy_cfg
       run_hook "post-${MODE}"
-      # read accounts for autoscale
-
-      # TODO: evauluate the need of this, probably just run autoscale everytime
-      # without additional checks. Same for instance_start
-      #if [[ -f "${PROJECT_DIR}/metadata.txt" ]]; then
-      #  ACCOUNTS="$(gawk '$1 == "ACCOUNTS:" { print $2; exit}' "${PROJECT_DIR}/metadata.txt")"
-      #  if [[ -n "$ACCOUNTS" ]]; then
-      #    instance_autoscale
-      #  fi
-      #fi
       ask_start || true
       echo "Done."
     } |& log_output "${PROJECT_DIR}"
