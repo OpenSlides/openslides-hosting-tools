@@ -58,6 +58,7 @@ OPT_SECRETS=
 OPT_SERVICES=
 OPT_STATS=
 OPT_USE_PARALLEL="${OPT_USE_PARALLEL:-1}"
+OPT_VERBOSE=0
 FILTER_STATE=
 FILTER_VERSION=
 CLONE_FROM=
@@ -140,6 +141,7 @@ Options:
   --force              Disable various safety checks
   --color=WHEN         Enable/disable color output.  WHEN is never, always, or
                        auto.
+  --verbose            Increase output verbosity (may be repeated)
   --help               Display this help message and exit
 
 EOF
@@ -272,6 +274,14 @@ warn() {
 
 info() {
   echo 1>&2 "${COL_GREEN}INFO${COL_NORMAL}: $*"
+}
+
+verbose() {
+  local lvl=$1
+  shift
+  [[ "$OPT_VERBOSE" -ge 1 ]] || return 0
+  [[ "$lvl" -le "$OPT_VERBOSE" ]] || return 0
+  echo 1>&2 "${COL_GREEN}DEBUG${lvl}${COL_NORMAL}: $*"
 }
 
 tag_output() {
@@ -417,6 +427,7 @@ select_management_tool() {
   fi
   MANAGEMENT_TOOL_HASH=
   if [[ -n "$OPT_MANAGEMENT_TOOL" ]]; then
+    verbose 2 "Selecting management tool based on option: ${OPT_MANAGEMENT_TOOL}."
     # The given argument is the special string "-", indicating that the version
     # should remain unchanged
     if [[ "$OPT_MANAGEMENT_TOOL" = '-' ]]; then
@@ -438,6 +449,8 @@ select_management_tool() {
     fi
   # Reading tool version from instance configuration
   elif MANAGEMENT_TOOL_HASH=$(value_from_config_yml "$pdir" '.managementToolHash'); then
+    verbose 2 "Selecting management tool based on instance configuration:" \
+              "${MANAGEMENT_TOOL_HASH}."
     # Version is set to simply follow latest
     if [[ "$MANAGEMENT_TOOL_HASH" = '*' ]]; then
       MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/latest"
@@ -448,6 +461,7 @@ select_management_tool() {
   fi
   MANAGEMENT_TOOL_HASH=$(hash_management_tool)
   [[ -x "$MANAGEMENT_TOOL" ]] || fatal "$MANAGEMENT_TOOL not found."
+  verbose 1 "Using management tool ${MANAGEMENT_TOOL}."
 }
 
 next_free_port() {
@@ -1574,6 +1588,7 @@ ask_start() {
 
 instance_setup_initialdata() {
   # Run setup steps that require the instance to be running
+  verbose 2 "instance_setup_initialdata()"
   local PORT=$(value_from_config_yml "$PROJECT_DIR" '.port')
   local max_progress_length=30
   local wait_count=0
@@ -1611,6 +1626,7 @@ instance_setup_initialdata() {
 instance_setup_user() {
   # Add a user if the setup secrets file exists.  After the user has been
   # created, the file is renamed.
+  verbose 2 "instance_setup_user()"
   local secret="${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
   if [[ -r "${secret}.setup" ]]; then
     "${MANAGEMENT_TOOL}" create-user $(openslides_connect_opts "$PROJECT_DIR") \
@@ -1622,6 +1638,7 @@ instance_setup_user() {
 instance_setup_organization() {
   # Set fields of organization if the setup file exists. After the organization
   # has been updated, the file is renamed.
+  verbose 2 "instance_setup_organization()"
   local file="${PROJECT_DIR}/setup/organization.yml"
   if [[ -r "${file}.setup" ]]; then
     # XXX: The syntax of `openslides set` might change in the future
@@ -1704,18 +1721,21 @@ instance_update() {
   append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"): Updated all services to" "${DOCKER_IMAGE_TAG_OPENSLIDES}"
 
   # Update management tool hash if requested
-  [[ "$OPT_MANAGEMENT_TOOL" = '-' ]] || {
+  if [[ "$OPT_MANAGEMENT_TOOL" = '-' ]]; then
+    verbose 1 "Not updating management tool."
+  else
     local cfg_hash=$MANAGEMENT_TOOL_HASH
     if [[ "$OPT_MANAGEMENT_TOOL" = '*' ]]; then
       cfg_hash='*'
     fi
+    verbose 1 "Updating management tool to $cfg_hash."
     local metadata_string="$(date +"%F %H:%M"): Updated management tool to $cfg_hash"
     update_config_yml "${PROJECT_DIR}/config.yml" \
       ".managementToolHash = \"$cfg_hash\""
     [[ "$cfg_hash" == "$MANAGEMENT_TOOL_HASH" ]] ||
       metadata_string+=" ($MANAGEMENT_TOOL_HASH)"
     append_metadata "$PROJECT_DIR" "$metadata_string"
-  }
+  fi
 
   instance_has_services_running "$PROJECT_STACK_NAME" || {
     info "${PROJECT_NAME} is not running."
@@ -1928,6 +1948,7 @@ longopt=(
   project-dir:
   force
   no-pid-file
+  verbose
 
   # display options
   long
@@ -2098,6 +2119,10 @@ while true; do
       OPT_DRY_RUN=1
       shift 1
       ;;
+    --verbose)
+      OPT_VERBOSE=$((OPT_VERBOSE +1))
+      shift 1
+      ;;
     -h|--help) USAGE=1; shift;;
     --) shift ; break ;;
     *) usage; exit 1 ;;
@@ -2165,12 +2190,6 @@ if [[ "$USAGE" ]]; then
   exit 0
 fi
 
-# Use GNU parallel if found
-if [[ "$OPT_USE_PARALLEL" -ne 0 ]] && [[ -f /usr/bin/env_parallel.bash ]]; then
-  source /usr/bin/env_parallel.bash
-  OPT_USE_PARALLEL=1
-fi
-
 case "$OPT_COLOR" in
   auto)
     if [[ -t 1 ]]; then enable_color; fi ;;
@@ -2181,6 +2200,21 @@ case "$OPT_COLOR" in
     fatal "Unknown option to --color" ;;
 esac
 
+# Config file
+if [[ -f "$CONFIG" ]]; then
+  verbose 1 "Applying options from ${CONFIG}."
+  # This actually happens before option parsing but is only printed here, so
+  # the --verbose options have been evaluated.
+fi
+
+# Use GNU parallel if found
+if [[ "$OPT_USE_PARALLEL" -ne 0 ]] && [[ -f /usr/bin/env_parallel.bash ]]; then
+  source /usr/bin/env_parallel.bash
+  OPT_USE_PARALLEL=1
+  verbose 2 "GNU parallel is enabled."
+else
+  verbose 2 "GNU parallel is disabled."
+fi
 
 DEPS=(
   docker
@@ -2229,6 +2263,7 @@ fi
 # docker-compose uses to name its containers, networks, etc.
 PROJECT_STACK_NAME="$(echo "$PROJECT_NAME" | tr -d '.')"
 
+verbose 1 "Configuring for deployment mode: ${DEPLOYMENT_MODE}."
 case "$DEPLOYMENT_MODE" in
   "stack")
     DCCONFIG_FILENAME="docker-stack.yml"
