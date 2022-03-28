@@ -31,6 +31,7 @@ ME=$(basename -s .sh "${BASH_SOURCE[0]}")
 CONFIG="/etc/os4instancectl"
 PIDFILE="/tmp/osinstancectl.pid"
 MARKER=".osinstancectl-marker"
+LOCKFILE=".osinstancectl-locks"
 DEFAULT_MANAGEMENT_VERSION=latest
 MANAGEMENT_TOOL="${MANAGEMENT_TOOL_BINDIR}/${DEFAULT_MANAGEMENT_VERSION}"
 PROJECT_NAME=
@@ -47,6 +48,7 @@ OPT_FAST=
 OPT_FORCE=
 OPT_JSON=
 OPT_LOCALONLY=
+OPT_LOCK_ACTION=()
 OPT_LOG=${OPT_LOG:-1}
 OPT_LONGLIST=
 OPT_MANAGEMENT_TOOL=
@@ -59,7 +61,8 @@ OPT_SERVICES=
 OPT_STATS=
 OPT_USE_PARALLEL="${OPT_USE_PARALLEL:-1}"
 OPT_VERBOSE=0
-FILTER_STATE=
+FILTER_RUNNING_STATE=
+FILTER_LOCKED_STATE=
 FILTER_VERSION=
 CLONE_FROM=
 ADMIN_SECRETS_FILE="superadmin"
@@ -73,6 +76,7 @@ OPT_PRECISE_PROJECT_NAME=
 CURL_OPTS=(--max-time 1 --retry 2 --retry-delay 1 --retry-max-time 3)
 HAS_DOCKER_ACCESS=
 HAS_MANAGEMENT_ACCESS=
+ALLOWED_LOCK_ACTIONS="autoscale clone erase remove start stop update"
 
 # Scale related
 declare -A SCALE_FROM=()
@@ -127,6 +131,9 @@ Actions:
   update               Update OpenSlides services to a new images
   erase                Execute the mid-erase hook without otherwise removing
                        the instance.
+  lock                 Put a lock on the instance which prohibits one or more
+                       actions from being executed for the instance.
+  unlock               Remove locks from an instance.
   autoscale            Scale relevant services of an instance based on it's
                        meetings dates and users. Will only scale down if there
                        no meeting scheduled for today.
@@ -161,6 +168,8 @@ case "$MODE" in
     -n, --online       Show only online instances
     -f, --offline      Show only stopped instances
     -e, --error        Show only running but unreachable instances
+    --locked           Show only locked instances (see \`lock\`/\`unlock\` modes)
+    --unlocked         Show only unlocked instances (see \`lock\`/\`unlock\` modes)
     -M,
     --search-metadata  Include metadata
     --fast             Include less information to increase listing speed
@@ -253,6 +262,14 @@ EOF
     --accounts=NUM     Specify the number of accounts to scale for overriding
                        read from metadata.txt
     --dry-run          Print out actions instead of actually performing them
+EOF
+;;
+  lock | unlock)
+    cat << EOF
+  for lock & unlock:
+    --action=ACTION    Specify a specific action to lock instead of all
+                       actions.  Available actions are:
+                       ${ALLOWED_LOCK_ACTIONS}
 EOF
 ;;
   *)
@@ -386,6 +403,13 @@ arg_check() {
         fatal "Update requires both the --tag and --management-tool options."
       ;;
   esac
+  case "$MODE" in
+    "lock" | "unlock")
+      for i in "${OPT_LOCK_ACTION[@]}"; do
+        grep -qw "$i" <<< "$ALLOWED_LOCK_ACTIONS" ||
+          fatal "Unknown action: ${i}."
+      done
+  esac
 }
 
 log_output() {
@@ -409,7 +433,7 @@ hash_management_tool() {
   # Return the SHA256 hash of the selected "openslides" tool.  For lack of
   # proper versioning, the hash is used to track compatibility with individual
   # instances by adding it to each config.yml.
-  sha256sum "$MANAGEMENT_TOOL" 2>/dev/null | awk '{ print $1 }' ||
+  sha256sum "$MANAGEMENT_TOOL" 2>/dev/null | gawk '{ print $1 }' ||
     fatal "$MANAGEMENT_TOOL not found."
 }
 
@@ -1059,7 +1083,7 @@ ls_instance() {
   fi
 
   # Filter online/offline instances
-  case "$FILTER_STATE" in
+  case "$FILTER_RUNNING_STATE" in
     online)
       [[ "$sym" = "$SYM_NORMAL" ]] || return 1 ;;
     stopped)
@@ -1073,6 +1097,22 @@ ls_instance() {
   # by currently_running_version())
   [[ -z "$FILTER_VERSION" ]] ||
     { grep -E -q "$FILTER_VERSION" <<< "$version" || return 1; }
+
+  # Fetch lock state and optionally filter based on it
+  local has_locks=false
+  local lockfile="${instance}/${LOCKFILE}"
+  if instance_has_locks "$shortname"; then
+    has_locks=true
+  fi
+  case "$FILTER_LOCKED_STATE" in
+    locked)
+      [[ "$has_locks" = true ]] || return 1
+      ;;
+    unlocked)
+      [[ "$has_locks" = false ]] || return 1
+      ;;
+    *) ;;
+  esac
 
   # Parse metadata for first line (used in overview)
   local first_metadatum=
@@ -1231,6 +1271,11 @@ ls_instance() {
         printf -- '--argjson %s_scale_target %s\n' "$s" "$v_target"
       done
     )
+    if [[ -f "$lockfile" ]] && grep -q '^update	' "$lockfile"; then
+      local update_is_locked=true
+    else
+      local update_is_locked=false
+    fi
 
     # Create a custom JSON object and merge it with the meetings information
     {
@@ -1242,6 +1287,8 @@ ls_instance() {
         --arg     "version_image"   "$version_from_image"               \
         --arg     "instance"        "$instance"                         \
         --arg     "status"          "$sym"                              \
+        --argjson "lock_status"     "$has_locks"                        \
+        --argjson "update_locked"   "$update_is_locked"                 \
         --argjson "port"            "$port"                             \
         --arg     "superadmin"      "$OPENSLIDES_ADMIN_PASSWORD"        \
         --arg     "user_name"       "$user_name"                        \
@@ -1267,6 +1314,10 @@ ls_instance() {
           version:       \$version,
           version_image: \$version_image,
           status:        \$status,
+          lock_status: {
+            has_locks: \$lock_status,
+            update_is_locked: \$update_locked
+          },
           port:          \$port,
           superadmin:    \$superadmin,
           user: {
@@ -1332,8 +1383,23 @@ ls_instance() {
       treefmt node "Stack name" "$normalized_shortname"
     fi
     treefmt node "Local port" "$port"
-    treefmt node "Version" "$version"
-    treefmt node "Version (image)" "$version_from_image"
+    treefmt node "Versions"
+    treefmt branch create
+      treefmt node "Images" "$version"
+      treefmt node "Built-in" "$version_from_image"
+    treefmt branch close
+    if [[ "$has_locks" = true ]]; then
+      local lock_action lock_time lock_name lock_email lock_reason
+      treefmt node "Lock status" "locked"
+      treefmt branch create
+        while IFS=$'\t' read -r lock_action lock_time lock_name lock_email lock_reason; do
+          lock_time=$(date -d "@$lock_time" -I)
+          treefmt node "$lock_action" "$lock_reason ($lock_name, $lock_email on $lock_time)"
+        done < "$lockfile"
+      treefmt branch close
+    else
+      treefmt node "Lock status" "unlocked"
+    fi
   fi
 
   # --services
@@ -1918,6 +1984,78 @@ instance_autoscale() {
   log_scale
 }
 
+instance_has_locks() {
+  local instance=$1
+  local lockfile="${INSTANCES}/${instance}/${LOCKFILE}"
+  if [[ -f "$lockfile" ]] && [[ $(wc -l < "$lockfile" ) -ge 1 ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+action_is_locked() {
+  local instance=$1
+  local action_query=${2:-all}
+  local lockfile="${INSTANCES}/${instance}/${LOCKFILE}"
+  local action locktime name email reason
+  [[ -d "${INSTANCES}/${instance}" ]] || fatal "Illegal argument to action_is_locked()?"
+  if [[ -f "${lockfile}" ]]; then
+    while IFS=$'\t' read -r action locktime name email reason; do
+      if [[ "$action" = "$action_query" ]] || [[ "$action" = "all" ]] || [[ "$action_query" = "all" ]]; then
+        locktime=$(date -d "@$locktime" -I)
+        echo "Action '$action' locked by ${name} (${email}) on ${locktime}: ${reason}"
+        return 0
+      fi
+    done < "${lockfile}"
+  fi
+  echo "Action '$action_query' not locked."
+  return 1
+}
+
+instance_lock() {
+  local instance=$1
+  local lockfile="${INSTANCES}/${instance}/${LOCKFILE}"
+  local is_locked
+  read -p "Reason: "
+  [[ -n "$REPLY" ]] || fatal "Need a reason to lock instance."
+  for i in "${OPT_LOCK_ACTION[@]:-all}"; do
+    if is_locked=$(action_is_locked "${PROJECT_NAME}" "$i"); then
+      warn "Already locked: $is_locked"
+    else
+      local locktime=$(date "+%s")
+      touch "${lockfile}"
+      printf "%s\t%d\t%s\t%s\t%s\n" "${i}" "$locktime" "${LOGNAME:-"unknown"}" \
+        "${EMAIL:-"unknown"}" "$REPLY" >> "${lockfile}"
+      append_metadata "$PROJECT_DIR" \
+        "$(date +"%F %H:%M"): $i locked by ${LOGNAME:-"unknown"} (${EMAIL:-"unknown"}): $REPLY"
+      echo "Action '$i' has been locked on ${PROJECT_NAME}."
+    fi
+  done
+}
+
+instance_unlock() {
+  local instance=$1
+  local lockfile="${INSTANCES}/${instance}/${LOCKFILE}"
+  local is_locked
+  for i in "${OPT_LOCK_ACTION[@]:-all}"; do
+    if is_locked=$(action_is_locked "${PROJECT_NAME}" "$i"); then
+      if [[ "$i" = "all" ]]; then
+        rm "${lockfile}"
+      else
+        local tmp=$(mktemp)
+        gawk -F'\t' -va="$i" '$1 == a {next} 1' "${lockfile}" >| "$tmp"
+        mv "$tmp" "${lockfile}"
+      fi
+      echo "Action '$i' has been unlocked on ${PROJECT_NAME}."
+      append_metadata "$PROJECT_DIR" \
+        "$(date +"%F %H:%M"): $i unlocked by ${LOGNAME:-"unknown"} (${EMAIL:-"unknown"})"
+    else
+      verbose 1 "$is_locked"
+    fi
+  done
+}
+
 run_hook() {
   local hook hook_name
   [[ -d "$HOOKS_DIR" ]] || return 0
@@ -1967,10 +2105,12 @@ longopt=(
   online
   offline
   error
+  locked
+  unlocked
+  version:
+  search-metadata
   fast
   patient
-  search-metadata
-  version:
 
   # adding instances
   clone-from:
@@ -1984,6 +2124,9 @@ longopt=(
   # autoscaling
   accounts:
   dry-run
+
+  # locking
+  action:
 )
 # format options array to comma-separated string for getopt
 longopt=$(IFS=,; echo "${longopt[*]}")
@@ -2069,19 +2212,31 @@ while true; do
       shift 1
       ;;
     -n|--online)
-      FILTER_STATE="online"
+      FILTER_RUNNING_STATE="online"
       shift 1
       ;;
     -f|--offline)
-      FILTER_STATE="stopped"
+      FILTER_RUNNING_STATE="stopped"
       shift 1
       ;;
     -e|--error)
-      FILTER_STATE="error"
+      FILTER_RUNNING_STATE="error"
       shift 1
       ;;
     --version)
       FILTER_VERSION="$2"
+      shift 2
+      ;;
+    --locked)
+      FILTER_LOCKED_STATE="locked"
+      shift 1
+      ;;
+    --unlocked)
+      FILTER_LOCKED_STATE="unlocked"
+      shift 1
+      ;;
+    --action)
+      OPT_LOCK_ACTION+=($2)
       shift 2
       ;;
     --clone-from)
@@ -2176,6 +2331,16 @@ for arg; do
     autoscale)
       [[ -z "$MODE" ]] || { usage; exit 2; }
       MODE=autoscale
+      shift 1
+      ;;
+    lock)
+      [[ -z "$MODE" ]] || { usage; exit 2; }
+      MODE=lock
+      shift 1
+      ;;
+    unlock)
+      [[ -z "$MODE" ]] || { usage; exit 2; }
+      MODE=unlock
       shift 1
       ;;
     *)
@@ -2276,8 +2441,15 @@ case "$MODE" in
   remove)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
+    # Check that instance was created by osinstancectl
     [[ -n "$OPT_FORCE" ]] || marker_check "$PROJECT_DIR" ||
       fatal "Refusing to delete unless --force is given."
+    # Check instance's lock status
+    if is_locked=$(action_is_locked "${PROJECT_NAME}" "$MODE"); then
+      fatal "Can not $MODE instance: $is_locked"
+    else
+      verbose 1 "$MODE action is not locked."
+    fi
     # Ask for confirmation
     ANS=
     echo "Delete the following instance including all of its data and configuration?"
@@ -2327,6 +2499,12 @@ case "$MODE" in
     create_and_check_pid_file
     CLONE_FROM_DIR="${INSTANCES}/${CLONE_FROM}"
     arg_check || { usage; exit 2; }
+    # Check instance's lock status
+    if is_locked=$(action_is_locked "${CLONE_FROM}" "$MODE"); then
+      fatal "Can not $MODE instance: $is_locked"
+    else
+      verbose 1 "$MODE action is not locked."
+    fi
     echo "Creating new instance: $PROJECT_NAME (based on $CLONE_FROM)"
     select_management_tool
     PORT=$(next_free_port)
@@ -2357,6 +2535,12 @@ case "$MODE" in
   start)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
+    # Check instance's lock status
+    if is_locked=$(action_is_locked "${PROJECT_NAME}" "$MODE"); then
+      fatal "Can not $MODE instance: $is_locked"
+    else
+      verbose 1 "$MODE action is not locked."
+    fi
     {
       select_management_tool
       append_metadata "$PROJECT_DIR" \
@@ -2369,6 +2553,12 @@ case "$MODE" in
   stop)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
+    # Check instance's lock status
+    if is_locked=$(action_is_locked "${PROJECT_NAME}" "$MODE"); then
+      fatal "Can not $MODE instance: $is_locked"
+    else
+      verbose 1 "$MODE action is not locked."
+    fi
     {
       instance_stop
       run_hook "post-${MODE}"
@@ -2378,6 +2568,12 @@ case "$MODE" in
   erase)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
+    # Check instance's lock status
+    if is_locked=$(action_is_locked "${PROJECT_NAME}" "$MODE"); then
+      fatal "Can not $MODE instance: $is_locked"
+    else
+      verbose 1 "$MODE action is not locked."
+    fi
     # Ask for confirmation
     ANS=
     echo "Stop the following instance, and remove its containers and volumes?"
@@ -2395,6 +2591,15 @@ case "$MODE" in
   update)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
+    # Check that instance was created by osinstancectl
+    [[ -n "$OPT_FORCE" ]] || marker_check "$PROJECT_DIR" ||
+      fatal "Refusing to delete unless --force is given."
+    # Check instance's lock status
+    if is_locked=$(action_is_locked "${PROJECT_NAME}" "$MODE"); then
+      fatal "Can not $MODE instance: $is_locked"
+    else
+      verbose 1 "$MODE action is not locked."
+    fi
     {
       select_management_tool
       append_metadata "$PROJECT_DIR" \
@@ -2408,11 +2613,25 @@ case "$MODE" in
   autoscale)
     create_and_check_pid_file
     arg_check || { usage; exit 2; }
+    # Check instance's lock status
+    if is_locked=$(action_is_locked "${PROJECT_NAME}" "$MODE"); then
+      fatal "Can not $MODE instance: $is_locked"
+    else
+      verbose 1 "$MODE action is not locked."
+    fi
     {
       select_management_tool
       instance_autoscale
       echo "Done."
     } |& log_output "${PROJECT_DIR}"
+    ;;
+  lock)
+    arg_check || { usage; exit 2; }
+    instance_lock "$PROJECT_NAME"
+    ;;
+  unlock)
+    arg_check || { usage; exit 2; }
+    instance_unlock "$PROJECT_NAME"
     ;;
   *)
     fatal "Missing command.  Please consult $ME --help."

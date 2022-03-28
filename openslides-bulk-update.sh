@@ -170,6 +170,13 @@ until [[ ${n:=0} -eq $NUM_INSTANCES ]]; do
     #   version="offline"
     # fi
   fi
+  # Identify and un-select locked instances
+  if jq --exit-status --argjson n "$n" \
+      '.instances[$n].lock_status.update_is_locked' <<< "$JSON_DATA" >/dev/null
+  then
+    checked="OFF"
+    version="locked!"
+  fi
   # Prepare output for whiptail
   fmt="$(printf "%s (%s) %s\n" "$instance" "$version" "$checked")"
   [[ ${#fmt} -le "$MAX_LENGTH" ]] || MAX_LENGTH=${#fmt}
