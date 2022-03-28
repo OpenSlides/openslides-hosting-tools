@@ -18,4 +18,3 @@ install:
 	  $(dest_bindir)/os4-bulk-update
 	$(INSTALL) -pm 0755 openslides-bin-installer.sh $(dest_bindir)/openslides-bin-installer
 	@echo "Removing outdated installation paths."
-	rm -rf $(dest_bindir)/os4stackctl
