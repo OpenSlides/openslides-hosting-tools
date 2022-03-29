@@ -1668,6 +1668,7 @@ instance_start() {
 instance_stop() {
   case "$DEPLOYMENT_MODE" in
     "stack")
+      PROJECT_STACK_NAME="$(value_from_config_yml "$PROJECT_DIR" '.stackName')"
       docker stack rm "$PROJECT_STACK_NAME" |& tag_output "$DEPLOYMENT_MODE"
     ;;
 esac
