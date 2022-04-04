@@ -585,7 +585,7 @@ update_config_instance_specifics() {
     update_config_yml "${PROJECT_DIR}/config.yml" ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
   fi
   update_config_yml "${PROJECT_DIR}/config.yml" \
-    ".services.proxy.environment.ALLOWED_HOSTS = \"127.0.0.1 $PROJECT_NAME\""
+    ".services.proxy.environment.ALLOWED_HOSTS = \"127.0.0.1:$PORT $PROJECT_NAME\""
 }
 
 update_config_services_db_connect_params() {
