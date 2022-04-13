@@ -635,7 +635,7 @@ query_user_account_name() {
   fi
 }
 
-create_user_secrets_file() {
+create_user_setup_file() {
   if [[ -n "$OPT_ADD_ACCOUNT" ]]; then
     local first_name
     local last_name
@@ -646,9 +646,9 @@ create_user_secrets_file() {
     last_name=$2
     email=$3
     PW=$(gen_pw)
-    touch "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}.setup"
-    chmod 600 "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}.setup"
-    cat << EOF >> "${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}.setup"
+    touch "${PROJECT_DIR}/setup/${USER_SECRETS_FILE}.setup"
+    chmod 600 "${PROJECT_DIR}/setup/${USER_SECRETS_FILE}.setup"
+    cat << EOF >> "${PROJECT_DIR}/setup/${USER_SECRETS_FILE}.setup"
 ---
 first_name: "$first_name"
 last_name: "$last_name"
@@ -1174,8 +1174,8 @@ ls_instance() {
         < "${instance}/secrets/${ADMIN_SECRETS_FILE}"
     fi
     # Parse user credentials file
-    if [[ -r "${instance}/secrets/${USER_SECRETS_FILE}" ]]; then
-      local user_secrets="${instance}/secrets/${USER_SECRETS_FILE}"
+    if [[ -r "${instance}/setup/${USER_SECRETS_FILE}" ]]; then
+      local user_secrets="${instance}/setup/${USER_SECRETS_FILE}"
       local OPENSLIDES_USER_FIRSTNAME=$(yq eval .first_name "${user_secrets}")
       local OPENSLIDES_USER_LASTNAME=$(yq eval .last_name "${user_secrets}")
       local OPENSLIDES_USER_PASSWORD=$(yq eval .default_password "${user_secrets}")
@@ -1629,9 +1629,9 @@ list_instances() {
 clone_instance_dir() {
   marker_check "$CLONE_FROM_DIR"
   cp -av "${CLONE_FROM_DIR}/config.yml" "${PROJECT_DIR}/"
-  cp -av "${CLONE_FROM_DIR}/secrets/superadmin" "${PROJECT_DIR}/secrets/"
-  [[ ! -f "${CLONE_FROM_DIR}/secrets/user.yml" ]] ||
-    cp -av "${CLONE_FROM_DIR}/secrets/user.yml" "${PROJECT_DIR}/secrets/"
+  cp -av "${CLONE_FROM_DIR}/setup/${ADMIN_SECRETS_FILE}" "${PROJECT_DIR}/secrets/"
+  [[ ! -f "${CLONE_FROM_DIR}/setup/{$USER_SECRETS_FILE}" ]] ||
+    cp -av "${CLONE_FROM_DIR}/setup/{$USER_SECRETS_FILE}" "${PROJECT_DIR}/secrets/"
 }
 
 append_metadata() {
@@ -1695,11 +1695,11 @@ instance_setup_user() {
   # Add a user if the setup secrets file exists.  After the user has been
   # created, the file is renamed.
   verbose 2 "instance_setup_user()"
-  local secret="${PROJECT_DIR}/secrets/${USER_SECRETS_FILE}"
-  if [[ -r "${secret}.setup" ]]; then
+  local userfile="${PROJECT_DIR}/setup/${USER_SECRETS_FILE}"
+  if [[ -r "${userfile}.setup" ]]; then
     "${MANAGEMENT_TOOL}" create-user $(openslides_connect_opts "$PROJECT_DIR") \
-      -f "${secret}.setup" |& tag_output manage
-    mv "${secret}.setup" "$secret"
+      -f "${userfile}.setup" |& tag_output manage
+    mv "${userfile}.setup" "$userfile"
   fi
 }
 
@@ -2479,7 +2479,7 @@ case "$MODE" in
     {
       update_config_instance_specifics
       create_admin_secrets_file
-      create_user_secrets_file "${OPENSLIDES_USER_FIRSTNAME}" \
+      create_user_setup_file "${OPENSLIDES_USER_FIRSTNAME}" \
         "${OPENSLIDES_USER_LASTNAME}" "${OPENSLIDES_USER_EMAIL}"
       update_config_services_db_connect_params
       recreate_compose_yml
