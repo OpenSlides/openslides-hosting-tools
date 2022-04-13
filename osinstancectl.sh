@@ -764,7 +764,8 @@ instance_health_status() {
   # Check instance's health through its provided HTTP resources
   #
   # backend
-  LC_ALL=C curl -s "${CURL_OPTS[@]}" "http://127.0.0.1:${1}/system/action/health" |
+  local port="${1:-$(value_from_config_yml "$PROJECT_DIR" '.port')}"
+  LC_ALL=C curl -s "${CURL_OPTS[@]}" "http://127.0.0.1:${port}/system/action/health" |
     jq -r '.status' 2>/dev/null | grep -q 'running'
 }
 
@@ -777,6 +778,17 @@ instance_has_services_running() {
   case "$DEPLOYMENT_MODE" in
     "stack")
       docker stack ls --format '{{ .Name }}' | grep -qw "^$instance\$" || return 1
+      ;;
+  esac
+}
+
+instance_has_manage_service_running() {
+  # Check if the manage-service is ready to execute commands by running it's
+  # version command, verifying that manage-client and -server are operating.
+  local instance="${1:-$PROJECT_DIR}"
+  case "$DEPLOYMENT_MODE" in
+    "stack")
+      "$MANAGEMENT_TOOL" version $(openslides_connect_opts "$instance") 2>&1 >/dev/null || return 1
       ;;
   esac
 }
@@ -1654,14 +1666,10 @@ ask_start() {
   esac
 }
 
-instance_setup_initialdata() {
-  # Run setup steps that require the instance to be running
-  verbose 2 "instance_setup_initialdata()"
-  local PORT=$(value_from_config_yml "$PROJECT_DIR" '.port')
+wait_for() {
   local max_progress_length=30
   local wait_count=0
-  printf "Waiting for instance to become ready."
-  until instance_health_status "$PORT"; do
+  until "$@"; do
     wait_count=$((wait_count + 1))
     sleep 5
     # Append periods unless the line is getting too long.
@@ -1672,23 +1680,22 @@ instance_setup_initialdata() {
     fi
   done
   printf ' done.\n'
-  local ec=
-  echo "Waiting for management tool to load initial data."
-  while :; do
-    {
-      "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts "$PROJECT_DIR") |&
-        tag_output manage
-      ec=$?
-    } || :
-    # Check initial-data success
-    if [[ $ec -eq 0 ]] || [[ $ec -eq 2 ]]; then
-      # 0: initial-data was successful; expected during initial setup
-      # 2: command refused to run because the database already contains data;
-      #    expected during instance_start() after the initial setup
-      break
-    fi
-    sleep 5
-  done
+}
+
+instance_initialdata() {
+  # Run setup steps that require the instance to be running
+  verbose 2 "instance_initialdata()"
+  {
+    "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts "$PROJECT_DIR") |&
+      tag_output manage
+    local ec=$?
+  } || true
+  [[ $ec -eq 0 ]] || [[ $ec -eq 2 ]] || {
+    # 0: initial-data was successful; expected during initial setup
+    # 2: command refused to run because the database already contains data;
+    #    expected during instance_start() after the initial setup
+    warn "Setting initial-data failed."
+  }
 }
 
 instance_setup_user() {
@@ -1726,11 +1733,18 @@ instance_start() {
         tag_output "$DEPLOYMENT_MODE"
       ;;
   esac
-  [[ "$MODE" == "update" ]] || {
-    instance_setup_initialdata
-    instance_setup_organization
-    instance_setup_user
-  }
+  if [[ "$MODE" == "update" ]]; then
+    return
+  fi
+
+  printf "Waiting for instance to become ready."
+  wait_for instance_health_status
+  printf "Waiting for manage-service to become ready."
+  wait_for instance_has_manage_service_running
+
+  instance_initialdata
+  instance_setup_organization
+  instance_setup_user
 }
 
 instance_stop() {
