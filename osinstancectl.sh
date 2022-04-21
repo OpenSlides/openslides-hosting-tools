@@ -23,6 +23,7 @@ COMPOSE_TEMPLATE=
 CONFIG_YML_TEMPLATE=
 HOOKS_DIR=
 MANAGEMENT_TOOL_BINDIR="/usr/local/lib/openslides-manage/versions"
+HAPROXYCFG="/etc/haproxy/haproxy.cfg"
 
 # Legacy instances path
 OS3_INSTANCES="/srv/openslides/docker-instances"
@@ -156,6 +157,7 @@ Actions:
                        should be stated after a '--'.
                        If the management command is more than one word it must be
                        quoted, e.g. 'migrations stats'.
+  setup                Run basic setup steps for $ME interactively.
   help <action>        Print detailed usage information for the given action.
 
 Options:
@@ -452,6 +454,114 @@ marker_check() {
     fatal "The instance was not created with $ME."
     return 1
   }
+}
+
+self_setup() {
+  local setup_with_errors=0
+  local n=0
+  check_ok() {
+    echo "    ${COL_GREEN}✓${COL_NORMAL} $*"
+  }
+  check_fail() {
+    echo "    ${COL_RED}✗${COL_NORMAL} $*"
+    setup_with_errors=1
+  }
+  printf "\n——— $ME setup assistant ———\n\n"
+  cat << EOF | tr '\n' ' ' | fold -s
+This command assists you in creating the basic setup required for OpenSlides 4
+deployments with $ME.  Please note, however, that this is not a fully automated
+setup procedure and that additional steps will be required.
+EOF
+printf '\n\n'
+  [[ ! -f "$CONFIG" ]] || {
+    info "Applying settings from $CONFIG."
+    echo
+  }
+  #
+  printf "\n $((++n)). Checking permissions\n"
+  [[ "$LOGNAME" = root ]] ||
+    check_fail "Not running as root.  root privileges are usually required."
+  if [[ "$HAS_DOCKER_ACCESS" ]]; then
+    check_ok "Docker access succeeded."
+    # Check if Swarm has been set up
+    if docker node inspect self >/dev/null 2>&1; then
+      check_ok "Docker Swarm is set up."
+    else
+      check_fail "Docker Swarm is not set up which is required for $ME."
+    fi
+  else
+    check_fail "You don't have access to docker."
+  fi
+  #
+  printf "\n $((++n)). Checking directories\n"
+  if [[ -d "$INSTANCES" ]]; then
+    check_ok "The instance directory ${INSTANCES}/ exists."
+  else
+    check_fail "The instance directory '${INSTANCES}/' does not exist."
+    read -p "    → Create it now? [y/N] "
+    case "$REPLY" in
+      Y|y|Yes|yes|YES) mkdir -pm 750 "$INSTANCES";;
+    esac
+  fi
+  #
+  printf "\n $((++n)). Checking external OpenSlides management tool\n"
+  if [[ -x "$MANAGEMENT_TOOL" ]]; then
+    check_ok "The 'openslides' management tool is installed ($MANAGEMENT_TOOL)."
+  else
+    check_fail "The management tool is not installed."
+    local bin_installer=openslides-bin-installer
+    # If openslides-bin-installer is installed or available next to $ME
+    if command -v $bin_installer >/dev/null || {
+        bin_installer="$(dirname "${BASH_SOURCE[0]}")/${bin_installer}.sh"
+        [[ -x "$bin_installer" ]]
+      }
+    then
+      echo
+      echo "    → Install the managment tool now?  $bin_installer will download" \
+           "the compiled program from GitHub."
+      echo "      Hint: See \`$bin_installer --help\` for the download URL and" \
+            "other methods of installing 'openslides'."
+      read -p "      Continue? [y/N] "
+      case "$REPLY" in
+        Y|y|Yes|yes|YES)
+          echo
+          "$bin_installer" --quiet |& tag_output "install" && setup_with_errors=0
+          ;;
+      esac
+    else
+      check_fail "Could not find openslides-bin-installer to automatically install the 'openslides' tool."
+      echo
+      echo "    → Hint: Please install openslides-bin-installer and use it to install the 'openslides' binary."
+    fi
+  fi
+  #
+  printf "\n $((++n)). Checking HAProxy setup\n"
+  if [[ -w "$HAPROXYCFG" ]]; then
+    check_ok "Found writable ${HAPROXYCFG}."
+    if grep -qF -- "-----BEGIN AUTOMATIC OPENSLIDES CONFIG-----" "$HAPROXYCFG" &&
+      grep -qF -- "-----END AUTOMATIC OPENSLIDES CONFIG-----" "$HAPROXYCFG"
+    then
+      check_ok "${HAPROXYCFG} has been set up for $ME."
+    else
+      check_fail "${HAPROXYCFG} has not been set up for $ME yet."
+      echo
+      echo "    → Hint: See haproxy.cfg.example in the repository for an example configuration."
+    fi
+  else
+      check_fail "${HAPROXYCFG} not found or writeable."
+      echo
+      echo "    → Hint: See haproxy.cfg.example in the repository for an example configuration."
+      echo "      Alternatively, you may create instances with the --local-only option."
+  fi
+  #
+  printf "\n——— RESULT ———\n"
+  if [[ "$setup_with_errors" -eq 0 ]]; then
+    echo "Congratulations, your system meets the basic prerequisites!"
+  else
+    echo "Unfortunately, not all prerequisites have been met. " \
+      "Running $ME without resolving the issues may fail."
+  fi
+  echo
 }
 
 hash_management_tool() {
@@ -762,7 +872,7 @@ create_instance_dir() {
 
 add_to_haproxy_cfg() {
   [[ -z "$OPT_LOCALONLY" ]] || return 0
-  cp -f /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.osbak &&
+  cp -f "${HAPROXYCFG}" "${HAPROXYCFG}.osbak" &&
     gawk -v target="${PROJECT_NAME}" -v port="${PORT}" '
     BEGIN {
       begin_block = "-----BEGIN AUTOMATIC OPENSLIDES CONFIG-----"
@@ -779,12 +889,12 @@ add_to_haproxy_cfg() {
       print
       e = 0
     }
-  ' /etc/haproxy/haproxy.cfg.osbak >| /etc/haproxy/haproxy.cfg &&
+  ' "${HAPROXYCFG}.osbak" >| "${HAPROXYCFG}" &&
     systemctl reload haproxy
 }
 
 rm_from_haproxy_cfg() {
-  cp -f /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.osbak &&
+  cp -f "${HAPROXYCFG}" "${HAPROXYCFG}.osbak" &&
   gawk -v target="${PROJECT_NAME}" -v port="${PORT}" '
     BEGIN {
       begin_block = "-----BEGIN AUTOMATIC OPENSLIDES CONFIG-----"
@@ -794,7 +904,7 @@ rm_from_haproxy_cfg() {
     $0 ~ end_block   { e = 1 }
     b && !e && $2 == target { next }
     1
-  ' /etc/haproxy/haproxy.cfg.osbak >| /etc/haproxy/haproxy.cfg &&
+  ' "${HAPROXYCFG}.osbak" >| "${HAPROXYCFG}" &&
     systemctl reload haproxy
 }
 
@@ -2570,6 +2680,11 @@ for arg; do
       MODE=unlock
       shift 1
       ;;
+    setup)
+      [[ -z "$MODE" ]] || { usage; exit 2; }
+      MODE=setup
+      shift 1
+      ;;
     *)
       # The final argument should be the project name/search pattern
       PROJECT_NAME="$arg"
@@ -2872,6 +2987,9 @@ case "$MODE" in
   unlock)
     arg_check || { usage; exit 2; }
     instance_unlock "$PROJECT_NAME"
+    ;;
+  setup)
+    self_setup
     ;;
   *)
     fatal "Missing command.  Please consult $ME --help."

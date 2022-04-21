@@ -27,7 +27,9 @@ BINDIR=
 REV=
 HASH=
 OPT_FORCE=
+OPT_QUIET=
 OPT_LINK=1
+CURL_OPTS=()
 
 cleanup() {
   if [[ -e "$TEMPFILE" ]]; then
@@ -82,7 +84,7 @@ install_version(){
 trap cleanup EXIT
 
 shortopt="hu:b:r:"
-longopt="help,force,url:,bindir:,no-link,build-revision:"
+longopt="help,force,quiet,url:,bindir:,no-link,build-revision:"
 ARGS=$(getopt -o "$shortopt" -l "$longopt" -n "$ME" -- "$@")
 if [ $? -ne 0 ]; then usage; exit 1; fi
 eval set -- "$ARGS"
@@ -103,6 +105,11 @@ while true; do
       ;;
     --force)
       OPT_FORCE=1
+      shift
+      ;;
+    --quiet)
+      OPT_QUIET=1
+      CURL_OPTS+=(--silent)
       shift
       ;;
     --no-link)
@@ -166,7 +173,7 @@ if [[ "$REV" ]]; then
   )
 else
   echo "Downloading $URL."
-  curl -L --output "$TEMPFILE" "$URL"
+  curl "${CURL_OPTS[@]}" -L --output "$TEMPFILE" "$URL"
 fi
 
 read -r HASH x < <(sha256sum "$TEMPFILE")

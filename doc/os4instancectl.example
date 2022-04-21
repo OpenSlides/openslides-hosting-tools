@@ -1,0 +1,32 @@
+# ==================================================
+# os4instancectl configuration file for OpenSlides 4
+# ==================================================
+#
+# Evaluated by /usr/local/bin/os4instancectl
+#
+
+# This is an example configuration file for os4instancectl.  It needs to be
+# available as /etc/os4instancectl to take effect.
+
+# Default template for config.yml
+#
+# If the variable is not set, the default template included in the openslides
+# management tool will be used.  The current version is available here:
+# https://github.com/OpenSlides/openslides-manage-service/blob/main/pkg/config/default-config.yml
+#
+CONFIG_YML_TEMPLATE=/etc/osinstancectl.d/custom-config.yml
+
+# Custom default template for the docker-compose file
+#
+# If the variable is not set, the default template included in the openslides
+# management tool will be used.  The current version is available here:
+# https://github.com/OpenSlides/openslides-manage-service/blob/main/pkg/config/default-docker-compose.yml
+#
+COMPOSE_TEMPLATE=/etc/osinstancectl.d/custom-compose.yml
+
+# If set, os4instancectl will look for applicable hook scripts in this
+# directory.  The scripts must be executable.
+#
+HOOKS_DIR=/etc/osinstancectl.d/hooks
+
+# vim: set ft=sh:

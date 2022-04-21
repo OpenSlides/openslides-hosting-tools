@@ -5,4 +5,4 @@
 # domain from acmetool's list of domains.
 
 echo "acmetool unwant..."
-acmetool unwant "$PROJECT_NAME" "www.${PROJECT_NAME}"
+acmetool unwant "$PROJECT_NAME"

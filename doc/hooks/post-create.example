@@ -1,0 +1,10 @@
+# This is an example post-create hook script
+
+# Generate Let's Encrypt certificate
+if [[ -z "$OPT_LOCALONLY" ]]; then
+  echo "Generating certificate..."
+  acmetool want "${PROJECT_NAME}"
+fi
+
+# Automate the database setup
+#su - postgres -c "createdb '${PROJECT_NAME}'"

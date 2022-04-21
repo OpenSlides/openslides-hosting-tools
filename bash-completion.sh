@@ -4,7 +4,7 @@ _os4instancectl()
   COMPREPLY=()
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
-  opts="help ls add rm start stop update erase lock unlock autoscale manage"
+  opts="help setup ls add rm start stop update erase lock unlock autoscale manage"
   opts+=" --help --force --color --project-dir --fast --patient --no-pid-file --no-add-account --verbose"
   opts+=" --compose-template --config-template"
   opts+=" --long --metadata --online --offline --error --version --locked --unlocked"
