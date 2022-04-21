@@ -5,7 +5,7 @@ _os4instancectl()
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[COMP_CWORD-1]}"
   opts="help ls add rm start stop update erase lock unlock autoscale"
-  opts+=" --help --force --color --project-dir --fast --patient --no-pid-file"
+  opts+=" --help --force --color --project-dir --fast --patient --no-pid-file --no-add-account"
   opts+=" --compose-template --config-template"
   opts+=" --long --metadata --online --offline --error --version --locked --unlocked"
   opts+=" --clone-from --local-only"

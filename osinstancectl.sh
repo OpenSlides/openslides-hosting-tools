@@ -3,7 +3,7 @@
 # Manage dockerized OpenSlides instances
 #
 # -------------------------------------------------------------------
-# Copyright (C) 2019,2021 by Intevation GmbH
+# Copyright (C) 2019 by Intevation GmbH
 # Author(s):
 # Gernot Schulz <gernot@intevation.de>
 # Adrian Richter <adrian@intevation.de>
@@ -143,8 +143,8 @@ Actions:
 Options:
   -d,
   --project-dir=DIR    Directly specify the project directory
-  --compose-template=FILE  Specify a YAML template
-  --config-template=FILE   Specify a .env template
+  --compose-template=FILE  Specify the docker-compose YAML template
+  --config-template=FILE   Specify the config.yml template
   --force              Disable various safety checks
   --color=WHEN         Enable/disable color output.  WHEN is never, always, or
                        auto.
@@ -2387,7 +2387,6 @@ DEPS=(
   gawk
   jq
   yq
-  m4
   nc
 )
 # Check dependencies
