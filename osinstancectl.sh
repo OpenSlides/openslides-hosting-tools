@@ -115,6 +115,14 @@ SYM_UNKNOWN="??"
 SYM_STOPPED="__"
 JQ="jq --monochrome-output"
 
+DEPS=(
+  docker
+  gawk
+  jq
+  nc
+  yq
+)
+
 enable_color() {
   NCOLORS=$(tput colors) # no. of colors
   if [[ -n "$NCOLORS" ]] && [[ "$NCOLORS" -ge 8 ]]; then
@@ -172,7 +180,7 @@ Options:
   --help               Display this help message and exit
 
 EOF
-case "$MODE" in
+case "${HELP_TOPIC:-}" in
   list)
     cat << EOF
 
@@ -383,14 +391,27 @@ create_and_check_pid_file() {
 
 check_for_dependency () {
     [[ -n "$1" ]] || return 0
-    command -v "$1" > /dev/null || { fatal "Dependency not found: $1"; }
+    command -v "$1" > /dev/null
 }
 
 arg_check() {
+  case "$MODE" in
+    # Mode-dependent dependency check
+    "setup") :;;
+    *)
+      for i in "${DEPS[@]}"; do
+          check_for_dependency "$i" || fatal "Dependency not found: $i"
+      done
+      ;;
+  esac
   [[ -d "$INSTANCES" ]] || { fatal "$INSTANCES not found!"; }
-  [[ -n "$PROJECT_NAME" ]] || {
-    fatal "Please specify a project name"; return 2;
-  }
+  # Commands that work without a specific instance argument
+  case "$MODE" in
+    "list") :;;
+    *)
+      [[ -n "$PROJECT_NAME" ]] || { fatal "Please specify a project name"; return 2; }
+      ;;
+  esac
   case "$MODE" in
     "start" | "stop" | "remove" | "erase" | "update" | "autoscale" | "create")
       [[ "$HAS_DOCKER_ACCESS" ]] ||
@@ -477,6 +498,14 @@ printf '\n\n'
     info "Applying settings from $CONFIG."
     echo
   }
+  echo " $((++n)). Checking dependencies"
+  for i in "${DEPS[@]}"; do
+    if check_for_dependency "$i"; then
+      check_ok "Found:     $i"
+    else
+      check_fail "Not found: $i"
+  fi
+  done
   #
   printf "\n $((++n)). Checking permissions\n"
   [[ "$LOGNAME" = root ]] ||
@@ -2611,7 +2640,7 @@ while true; do
       OPT_VERBOSE=$((OPT_VERBOSE +1))
       shift 1
       ;;
-    -h|--help) USAGE=1; shift;;
+    -h|--help) USAGE=1; break;;
     --) shift ; break ;;
     *) usage; exit 1 ;;
   esac
@@ -2622,7 +2651,7 @@ for arg; do
   case $arg in
     help)
       USAGE=1
-      shift
+      shift 1
       ;;
     ls|list)
       [[ -z "$MODE" ]] || { usage; exit 2; }
@@ -2694,11 +2723,6 @@ for arg; do
   esac
 done
 
-if [[ "$USAGE" ]]; then
-  usage
-  exit 0
-fi
-
 case "$OPT_COLOR" in
   auto)
     if [[ -t 1 ]]; then enable_color; fi ;;
@@ -2724,18 +2748,6 @@ if [[ "$OPT_USE_PARALLEL" -ne 0 ]] && [[ -f /usr/bin/env_parallel.bash ]]; then
 else
   verbose 2 "GNU parallel is disabled."
 fi
-
-DEPS=(
-  docker
-  gawk
-  jq
-  yq
-  nc
-)
-# Check dependencies
-for i in "${DEPS[@]}"; do
-    check_for_dependency "$i"
-done
 
 # Check if user has access to docker
 if docker info >/dev/null 2>&1; then
@@ -2779,10 +2791,22 @@ case "$DEPLOYMENT_MODE" in
 esac
 DCCONFIG="${PROJECT_DIR}/${DCCONFIG_FILENAME}"
 
+# If `help`, then the next argument is the mode to look up usage info for
+if [[ "$USAGE" ]]; then
+  HELP_TOPIC=$MODE
+  MODE=help
+fi
+
 case "$MODE" in
+  help)
+    usage
+    ;;
+  setup)
+    self_setup
+    ;;
   remove)
     create_and_check_pid_file
-    arg_check || { usage; exit 2; }
+    arg_check
     # Check that instance was created by osinstancectl
     [[ -n "$OPT_FORCE" ]] || marker_check "$PROJECT_DIR" ||
       fatal "Refusing to delete unless --force is given."
@@ -2807,7 +2831,7 @@ case "$MODE" in
     ;;
   create)
     create_and_check_pid_file
-    arg_check || { usage; exit 2; }
+    arg_check
     # Use defaults in the absence of options
     echo "Creating new instance: $PROJECT_NAME"
     # If not specified, set management tool to "-", i.e., track the latest
@@ -2841,7 +2865,7 @@ case "$MODE" in
   clone)
     create_and_check_pid_file
     CLONE_FROM_DIR="${INSTANCES}/${CLONE_FROM}"
-    arg_check || { usage; exit 2; }
+    arg_check
     # Check instance's lock status
     if is_locked=$(action_is_locked "${CLONE_FROM}" "$MODE"); then
       fatal "Can not $MODE instance: $is_locked"
@@ -2872,12 +2896,13 @@ case "$MODE" in
     } |& log_output "${PROJECT_DIR}"
     ;;
   list)
+    arg_check
     [[ -z "$OPT_PRECISE_PROJECT_NAME" ]] || PROJECT_NAME="^${PROJECT_NAME}$"
     list_instances
     ;;
   start)
     create_and_check_pid_file
-    arg_check || { usage; exit 2; }
+    arg_check
     # Check instance's lock status
     if is_locked=$(action_is_locked "${PROJECT_NAME}" "$MODE"); then
       fatal "Can not $MODE instance: $is_locked"
@@ -2895,7 +2920,7 @@ case "$MODE" in
     ;;
   stop)
     create_and_check_pid_file
-    arg_check || { usage; exit 2; }
+    arg_check
     # Check instance's lock status
     if is_locked=$(action_is_locked "${PROJECT_NAME}" "$MODE"); then
       fatal "Can not $MODE instance: $is_locked"
@@ -2910,7 +2935,7 @@ case "$MODE" in
     ;;
   erase)
     create_and_check_pid_file
-    arg_check || { usage; exit 2; }
+    arg_check
     # Check instance's lock status
     if is_locked=$(action_is_locked "${PROJECT_NAME}" "$MODE"); then
       fatal "Can not $MODE instance: $is_locked"
@@ -2933,7 +2958,7 @@ case "$MODE" in
     ;;
   update)
     create_and_check_pid_file
-    arg_check || { usage; exit 2; }
+    arg_check
     # Check that instance was created by osinstancectl
     [[ -n "$OPT_FORCE" ]] || marker_check "$PROJECT_DIR" ||
       fatal "Refusing to delete unless --force is given."
@@ -2955,7 +2980,7 @@ case "$MODE" in
     ;;
   autoscale)
     create_and_check_pid_file
-    arg_check || { usage; exit 2; }
+    arg_check
     # Check instance's lock status
     if is_locked=$(action_is_locked "${PROJECT_NAME}" "$MODE"); then
       fatal "Can not $MODE instance: $is_locked"
@@ -2981,15 +3006,12 @@ case "$MODE" in
     call_manage_tool "$PROJECT_DIR" "$@"
     ;;
   lock)
-    arg_check || { usage; exit 2; }
+    arg_check
     instance_lock "$PROJECT_NAME"
     ;;
   unlock)
-    arg_check || { usage; exit 2; }
+    arg_check
     instance_unlock "$PROJECT_NAME"
-    ;;
-  setup)
-    self_setup
     ;;
   *)
     fatal "Missing command.  Please consult $ME --help."
