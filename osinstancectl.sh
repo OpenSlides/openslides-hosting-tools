@@ -140,6 +140,12 @@ Actions:
                        meetings dates and users. Will only scale down if there
                        no meeting scheduled for today.
                        (adjust values in CONFIG file)
+  manage               Call the openslides-manage tool on an instance.
+                       \`openslides help\` for more details on usage.
+                       All args ond opts that are to be passed to the tool
+                       should be stated after a '--'.
+                       If the manage command is more than one word it must be
+                       quoted, e.g. "migrations stats".
   help <action>        Print detailed usage information for the given action.
 
 Options:
@@ -373,7 +379,7 @@ arg_check() {
       ;;
   esac
   case "$MODE" in
-    "start" | "stop" | "remove" | "erase" | "update" | "autoscale" | "lock" | "unlock")
+    "start" | "stop" | "remove" | "erase" | "update" | "autoscale" | "manage" | "lock" | "unlock")
       [[ -d "$PROJECT_DIR" ]] || {
         fatal "Instance '${PROJECT_NAME}' not found."
       }
@@ -490,6 +496,42 @@ select_management_tool() {
   verbose 1 "Using management tool ${MANAGEMENT_TOOL}."
 }
 
+call_manage_tool() {
+  local opts=
+  local dir="$1"
+  local cmd="$2"
+  shift 2
+  local args="$@"
+
+  case "$cmd" in
+    # non-applicable commands, call without default opts
+    config-create-default | help )
+      break
+      ;;
+    # manage commands that don't connect to the manage-server,
+    # instead they operate in PROJECT_DIR
+    setup | config )
+      local template= config=
+      [[ -z "$COMPOSE_TEMPLATE" ]] ||
+        template="--template=${COMPOSE_TEMPLATE}"
+      [[ -z "$CONFIG_YML_TEMPLATE" ]] ||
+        config="--config=${CONFIG_YML_TEMPLATE}"
+      opts="$template $config --config=$PROJECT_DIR/config.yml $dir"
+      ;;
+    # all others are assumed to connect to the manage-server
+    *)
+      local port=$(value_from_config_yml "$dir" '.port')
+      local secret="${dir}/secrets/manage_auth_password"
+      # The manage tool can't connect to the manage-server without access to the secret.
+      [[ -r "$secret" ]] || return 1
+      opts="-a 127.0.0.1:${port} --password-file $secret --no-ssl"
+      ;;
+  esac
+
+  verbose 1 "Executing $MANAGEMENT_TOOL $cmd $opts $args"
+  $MANAGEMENT_TOOL $cmd $opts $args
+}
+
 next_free_port() {
   # Select new port
   #
@@ -551,23 +593,8 @@ update_config_yml() {
 }
 
 recreate_compose_yml() {
-  local template= config=
-  [[ -z "$COMPOSE_TEMPLATE" ]] ||
-    template="--template=${COMPOSE_TEMPLATE}"
-  [[ -z "$CONFIG_YML_TEMPLATE" ]] ||
-    config="--config=${CONFIG_YML_TEMPLATE}"
-  "${MANAGEMENT_TOOL}" config $template $config \
-    --config="${PROJECT_DIR}/config.yml" "${PROJECT_DIR}" |&
+  call_manage_tool "$PROJECT_DIR" config |&
     tag_output manage
-}
-
-openslides_connect_opts() {
-  local dir=${1-$PROJECT_DIR}
-  local port=$(value_from_config_yml "$dir" '.port')
-  local secret="${dir}/secrets/manage_auth_password"
-  # The management tool/service can't be used without access to the secret.
-  [[ -r "$secret" ]] || return 1
-  echo "-a 127.0.0.1:${port} --password-file $secret --no-ssl"
 }
 
 gen_pw() {
@@ -679,13 +706,7 @@ EOF
 }
 
 create_instance_dir() {
-  local template= config=
-  [[ -z "$COMPOSE_TEMPLATE" ]] ||
-    template="--template=${COMPOSE_TEMPLATE}"
-  [[ -z "$CONFIG_YML_TEMPLATE" ]] ||
-    config="--config=${CONFIG_YML_TEMPLATE}"
-
-  "${MANAGEMENT_TOOL}" setup $template $config "$PROJECT_DIR" |& tag_output manage ||
+  call_manage_tool "$PROJECT_DIR" setup |& tag_output manage ||
     fatal "Error during \`"${MANAGEMENT_TOOL}" setup\`"
   touch "${PROJECT_DIR}/${MARKER}"
 
@@ -805,7 +826,7 @@ instance_has_manage_service_running() {
   local instance="${1:-$PROJECT_DIR}"
   case "$DEPLOYMENT_MODE" in
     "stack")
-      "$MANAGEMENT_TOOL" version $(openslides_connect_opts "$instance") 2>&1 >/dev/null || return 1
+      call_manage_tool "$instance" version 2>&1 >/dev/null || return 1
       ;;
   esac
 }
@@ -1093,11 +1114,10 @@ ls_instance() {
     # Check if access to the openslides management tool/service is available.  If
     # not, some functions must be skipped.
     select_management_tool "$instance" # Configure the correct version for this instance
-    if mngmt_cmd=("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance")); then
-      HAS_MANAGEMENT_ACCESS=1
-      # Run an actual test query
-      "${mngmt_cmd[@]}" user --fields id 2>&1 >/dev/null || HAS_MANAGEMENT_ACCESS=
-    fi
+    HAS_MANAGEMENT_ACCESS=1
+    # Run a test query
+    call_manage_tool "$instance" get user --fields id 2>&1 >/dev/null ||
+      HAS_MANAGEMENT_ACCESS=
   else
     # If we can not connect to the reverse proxy, the instance may have been
     # stopped on purpose or there is a problem
@@ -1233,7 +1253,7 @@ ls_instance() {
         stats_active_meetings \
         stats_feature_evoting \
         stats_feature_chat \
-      < <("${mngmt_cmd[@]}" organization | jq -r '
+      < <(call_manage_tool "$instance" get organization | jq -r '
           .[] | [
             .limit_of_users,
             .limit_of_meetings,
@@ -1243,8 +1263,8 @@ ls_instance() {
           ] | @tsv')
     #
     # User
-    stats_total_users=$("${mngmt_cmd[@]}" user --fields id | jq -r '. | length')
-    stats_active_users=$("${mngmt_cmd[@]}" user --fields id --filter=is_active=true  | jq -r '. | length')
+    stats_total_users=$(call_manage_tool "$instance" get user --fields id | jq -r '. | length')
+    stats_active_users=$(call_manage_tool "$instance" get user --fields id --filter=is_active=true  | jq -r '. | length')
     #
     # Meetings
     if [[ "$OPT_STATS" ]]; then
@@ -1271,13 +1291,13 @@ ls_instance() {
         stat_meeting_jitsi_domain[$id]=$jitsi_domain
         stat_meeting_jitsi_room_name[$id]=$jitsi_room_name
         stat_meeting_jitsi_room_password[$id]=$jitsi_room_password
-      done < <("${mngmt_cmd[@]}" meeting \
+      done < <(call_manage_tool "$instance" get meeting \
         --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
         jq -cr '.[] | flatten | @tsv')
     fi
     if [[ "$OPT_JSON" ]]; then
       # Meeting info in JSON format for --json
-      stats_meetings_json=$("${mngmt_cmd[@]}" meeting \
+      stats_meetings_json=$(call_manage_tool "$instance" get meeting \
         --fields=id,name,start_time,end_time,jitsi_domain,jitsi_room_name,jitsi_room_password |
         jq '{ meetings: [.[]] }')
     fi
@@ -1703,7 +1723,7 @@ instance_initialdata() {
   # Run setup steps that require the instance to be running
   verbose 2 "instance_initialdata()"
   {
-    "${MANAGEMENT_TOOL}" initial-data $(openslides_connect_opts "$PROJECT_DIR") |&
+    call_manage_tool "$PROJECT_DIR" initial-data |&
       tag_output manage
     local ec=$?
   } || true
@@ -1721,7 +1741,7 @@ instance_setup_user() {
   verbose 2 "instance_setup_user()"
   local userfile="${PROJECT_DIR}/setup/${USER_SECRETS_FILE}"
   if [[ -r "${userfile}.setup" ]]; then
-    "${MANAGEMENT_TOOL}" create-user $(openslides_connect_opts "$PROJECT_DIR") \
+    call_manage_tool "$PROJECT_DIR" create-user \
       -f "${userfile}.setup" |& tag_output manage
     mv "${userfile}.setup" "$userfile"
   fi
@@ -1734,7 +1754,7 @@ instance_setup_organization() {
   local file="${PROJECT_DIR}/setup/organization.yml"
   if [[ -r "${file}.setup" ]]; then
     # XXX: The syntax of `openslides set` might change in the future
-    "${MANAGEMENT_TOOL}" set $(openslides_connect_opts "$PROJECT_DIR") organization \
+    call_manage_tool "$PROJECT_DIR" set organization \
       -f "${file}.setup" |& tag_output manage
     mv "${file}.setup" "$file"
   fi
@@ -1877,7 +1897,7 @@ autoscale_gather() {
   ACCOUNTS_TODAY=0
   local today=$(date +%s)
 
-  j_meeting_data=$("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance") meeting --fields start_time,end_time,user_ids)
+  j_meeting_data=$(call_manage_tool "$instance" get meeting --fields start_time,end_time,user_ids)
   for i in $(jq '(. | keys)[]' <<< "$j_meeting_data"); do
     start_time="$(jq ".${i}.start_time" <<< "$j_meeting_data")"
     end_time="$(jq ".${i}.end_time" <<< "$j_meeting_data")"
@@ -1900,7 +1920,7 @@ autoscale_gather() {
     ACCOUNTS_TODAY="$ACCOUNTS"
   else
     # else read current number of users in the instance
-    ACCOUNTS=$("${MANAGEMENT_TOOL}" get $(openslides_connect_opts "$instance") user --fields id | jq '. | length')
+    ACCOUNTS=$(call_manage_tool "$instance" get user --fields id | jq '. | length')
   fi
 
   # ask current scalings from docker
@@ -2366,6 +2386,11 @@ for arg; do
       MODE=autoscale
       shift 1
       ;;
+    manage)
+      [[ -z "$MODE" ]] || { usage; exit 2; }
+      MODE=manage
+      shift 1
+      ;;
     lock)
       [[ -z "$MODE" ]] || { usage; exit 2; }
       MODE=lock
@@ -2379,6 +2404,7 @@ for arg; do
     *)
       # The final argument should be the project name/search pattern
       PROJECT_NAME="$arg"
+      shift 1
       break
       ;;
   esac
@@ -2657,6 +2683,18 @@ case "$MODE" in
       instance_autoscale
       echo "Done."
     } |& log_output "${PROJECT_DIR}"
+    ;;
+  manage)
+    create_and_check_pid_file
+    arg_check || { usage; exit 2; }
+    # Check instance's lock status
+    if is_locked=$(action_is_locked "${PROJECT_NAME}" "$MODE"); then
+      fatal "Can not $MODE instance: $is_locked"
+    else
+      verbose 1 "$MODE action is not locked."
+    fi
+    select_management_tool
+    call_manage_tool "$PROJECT_DIR" "$@"
     ;;
   lock)
     arg_check || { usage; exit 2; }
