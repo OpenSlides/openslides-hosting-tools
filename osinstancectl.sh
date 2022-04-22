@@ -371,7 +371,7 @@ arg_check() {
       ;;
   esac
   case "$MODE" in
-    "start" | "stop" | "remove" | "erase" | "update" | "autoscale")
+    "start" | "stop" | "remove" | "erase" | "update" | "autoscale" | "lock" | "unlock")
       [[ -d "$PROJECT_DIR" ]] || {
         fatal "Instance '${PROJECT_NAME}' not found."
       }
