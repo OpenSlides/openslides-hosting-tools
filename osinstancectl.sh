@@ -68,6 +68,8 @@ CLONE_FROM=
 ADMIN_SECRETS_FILE="superadmin"
 USER_SECRETS_FILE="user.yml"
 DB_SECRETS_FILE="postgres_password"
+LEGAL_NOTICE_FILE=
+PRIVACY_POLICY_FILE=
 OPENSLIDES_USER_FIRSTNAME=
 OPENSLIDES_USER_LASTNAME=
 OPENSLIDES_USER_EMAIL=
@@ -635,6 +637,20 @@ query_user_account_name() {
   fi
 }
 
+create_organization_setup_file() {
+  # LEGAL_NOTICE_FILE and PRIVACY_POLICY_FILE can be set in
+  # osinstancectl config file ($CONFIG)
+  local setup_file="$PROJECT_DIR/setup/organization.yml.setup"
+  touch "$setup_file"
+  yq eval -i ".[0].id = 1" "$setup_file"
+  [[ ! -f "$LEGAL_NOTICE_FILE" ]] ||
+    text="$(cat "$LEGAL_NOTICE_FILE")" \
+      yq eval -i ".[0].legal_notice = strenv(text)" "$setup_file"
+  [[ ! -f "$PRIVACY_POLICY_FILE" ]] ||
+    text="$(cat "$PRIVACY_POLICY_FILE")" \
+      yq eval -i ".[0].privacy_policy = strenv(text)" "$setup_file"
+}
+
 create_user_setup_file() {
   if [[ -n "$OPT_ADD_ACCOUNT" ]]; then
     local first_name
@@ -646,9 +662,10 @@ create_user_setup_file() {
     last_name=$2
     email=$3
     PW=$(gen_pw)
-    touch "${PROJECT_DIR}/setup/${USER_SECRETS_FILE}.setup"
-    chmod 600 "${PROJECT_DIR}/setup/${USER_SECRETS_FILE}.setup"
-    cat << EOF >> "${PROJECT_DIR}/setup/${USER_SECRETS_FILE}.setup"
+    local setup_file="${PROJECT_DIR}/setup/${USER_SECRETS_FILE}.setup"
+    touch "$setup_file"
+    chmod 600 "$setup_file"
+    cat << EOF >> "$setup_file"
 ---
 first_name: "$first_name"
 last_name: "$last_name"
@@ -2495,6 +2512,7 @@ case "$MODE" in
       create_admin_secrets_file
       create_user_setup_file "${OPENSLIDES_USER_FIRSTNAME}" \
         "${OPENSLIDES_USER_LASTNAME}" "${OPENSLIDES_USER_EMAIL}"
+      create_organization_setup_file
       update_config_services_db_connect_params
       recreate_compose_yml
       append_metadata "$PROJECT_DIR" ""
