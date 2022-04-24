@@ -2453,7 +2453,7 @@ case "$MODE" in
     ANS=
     echo "Delete the following instance including all of its data and configuration?"
     # Show instance listing
-    OPT_LONGLIST=1 OPT_METADATA=1 OPT_METADATA_SEARCH= \
+    OPT_LONGLIST=1 OPT_STATS=1 OPT_METADATA=1 OPT_METADATA_SEARCH= \
       ls_instance "$PROJECT_DIR" | colorize_ls
     echo
     read -rp "Really delete? (uppercase YES to confirm) " ANS
@@ -2577,7 +2577,7 @@ case "$MODE" in
     ANS=
     echo "Stop the following instance, and remove its containers and volumes?"
     # Show instance listing
-    OPT_LONGLIST=1 OPT_METADATA=1 OPT_METADATA_SEARCH= \
+    OPT_LONGLIST=1 OPT_STATS=1 OPT_METADATA=1 OPT_METADATA_SEARCH= \
       ls_instance "$PROJECT_DIR" | colorize_ls
     echo
     read -rp "Really delete? (uppercase YES to confirm) " ANS
