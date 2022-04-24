@@ -17,7 +17,7 @@ set -eu
 set -o noclobber
 set -o pipefail
 
-# Defaults (override in /etc/os4instancectl)
+# Defaults (override in $CONFIG)
 INSTANCES="/srv/openslides/os4-instances"
 COMPOSE_TEMPLATE=
 CONFIG_YML_TEMPLATE=
@@ -29,8 +29,8 @@ HAPROXYCFG="/etc/haproxy/haproxy.cfg"
 OS3_INSTANCES="/srv/openslides/docker-instances"
 
 # constants
+CONFIG="/etc/osinstancectl.d/os4instancectlrc"
 ME=$(basename -s .sh "${BASH_SOURCE[0]}")
-CONFIG="/etc/os4instancectl"
 PIDFILE="/tmp/osinstancectl.pid"
 MARKER=".osinstancectl-marker"
 LOCKFILE=".osinstancectl-locks"

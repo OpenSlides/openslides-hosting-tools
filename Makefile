@@ -13,6 +13,7 @@ all:
 install:
 	$(INSTALL) -d $(dest_bindir)
 	$(INSTALL) -pm 0755 osinstancectl.sh $(dest_bindir)/os4instancectl
+	mkdir -p /etc/osinstancectl.d
 	$(INSTALL) -pm 644 bash-completion.sh /etc/bash_completion.d/os4instancectl
 	$(INSTALL) -pm 0755 openslides-bulk-update.sh \
 	  $(dest_bindir)/os4-bulk-update
