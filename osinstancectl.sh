@@ -20,7 +20,7 @@ set -o pipefail
 # Defaults (override in $CONFIG)
 INSTANCES="/srv/openslides/os4-instances"
 COMPOSE_TEMPLATE=
-CONFIG_YML_TEMPLATE=
+CONFIG_YML_TEMPLATE="/etc/osinstancectl.d/config.yml.template"
 HOOKS_DIR=
 MANAGEMENT_TOOL_BINDIR="/usr/local/lib/openslides-manage/versions"
 HAPROXYCFG="/etc/haproxy/haproxy.cfg"
@@ -534,12 +534,15 @@ printf '\n\n'
   fi
   #
   printf "\n $((++n)). Checking $ME configuration\n"
-  if [[ -f "$CONFIG" ]]; then
-    check_ok "Configuration file exists."
+  if [[ -f "$CONFIG_YML_TEMPLATE" ]]; then
+    check_ok "Found configuration template file $CONFIG_YML_TEMPLATE."
   else
-    check_fail "Configuration file $CONFIG not found."
-    echo "    → Hint: You can create instances anyway; however, they will not" \
-          "function without prior manual configuration."
+    check_fail "Configuration template $CONFIG_YML_TEMPLATE not found."
+    read -p "    → Create a minimal template now? [y/N] "
+    case "$REPLY" in
+      Y|y|Yes|yes|YES)
+        create_config_template || setup_with_errors=1 ;;
+    esac
   fi
   #
   printf "\n $((++n)). Checking external OpenSlides management tool\n"
@@ -877,7 +880,54 @@ EOF
   fi
 }
 
+create_config_template() {
+  if [[ -f "$CONFIG_YML_TEMPLATE" ]]; then
+    return 2
+  fi
+  mkdir -p "$(dirname "$CONFIG_YML_TEMPLATE")"
+  cat > "$CONFIG_YML_TEMPLATE" << EOF
+---
+filename: "$DCCONFIG_FILENAME"
+host: 0.0.0.0
+disablePostgres: true
+disableDependsOn: true
+enableLocalHTTPS: false
+
+defaultEnvironment:
+  DATASTORE_DATABASE_HOST: localhost
+  DATASTORE_DATABASE_PORT: 5432
+  MEDIA_DATABASE_HOST: localhost
+  MEDIA_DATABASE_PORT: 5432
+  VOTE_DATABASE_HOST: localhost
+  VOTE_DATABASE_PORT: 5432
+EOF
+}
+
 create_instance_dir() {
+  local template= config=
+
+  if [[ ! -f "$CONFIG_YML_TEMPLATE" ]]; then
+    warn "Configuration template $CONFIG_YML_TEMPLATE does not exist."
+    local REPLY
+    read -p "Create a mininmal template now? [Y/n] "
+    case "$REPLY" in
+      Y|y|Yes|yes|YES|"")
+        create_config_template
+        ;;
+      *)
+        # Refuse to continue without a template.  It would be easy to
+        # transparently continue with a temporary file; however, at least for
+        # now, encouraging the use of a central configuration file that can
+        # also be used with the management tool directly is the simpler and
+        # clearer behavior.
+        fatal "Cannot continue without suitable configuration template."
+        ;;
+    esac
+  fi
+
+  [[ -z "$COMPOSE_TEMPLATE" ]] ||
+    template="--template=${COMPOSE_TEMPLATE}"
+
   call_manage_tool "$PROJECT_DIR" setup |& tag_output manage ||
     fatal "Error during \`"${MANAGEMENT_TOOL}" setup\`"
   touch "${PROJECT_DIR}/${MARKER}"
