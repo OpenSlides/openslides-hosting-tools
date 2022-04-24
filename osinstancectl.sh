@@ -533,6 +533,15 @@ printf '\n\n'
     esac
   fi
   #
+  printf "\n $((++n)). Checking $ME configuration\n"
+  if [[ -f "$CONFIG" ]]; then
+    check_ok "Configuration file exists."
+  else
+    check_fail "Configuration file $CONFIG not found."
+    echo "    → Hint: You can create instances anyway; however, they will not" \
+          "function without prior manual configuration."
+  fi
+  #
   printf "\n $((++n)). Checking external OpenSlides management tool\n"
   if [[ -x "$MANAGEMENT_TOOL" ]]; then
     check_ok "The 'openslides' management tool is installed ($MANAGEMENT_TOOL)."
