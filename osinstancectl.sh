@@ -784,9 +784,11 @@ instance_has_services_running() {
 fetch_instance_builtin_version() {
   # Connect to OpenSlides and parse its version string
   #
-  # This is a simple method to test the availability of the app.
-  # LC_ALL=C curl -s "${CURL_OPTS[@]}" "http://127.0.0.1:${1}/assets/version.txt" ||
-  LC_ALL=C curl -s "${CURL_OPTS[@]}" "https://${1}/assets/version.txt" ||
+  # This is a simple method to test the availability of the app.  The function
+  # deliberately does not use the management tool's `version` command because
+  # that requires access to the management secret.  The method chosen here can
+  # provide even less privileged users with the same version information.
+  LC_ALL=C curl -s --fail "${CURL_OPTS[@]}" "http://127.0.0.1:${1}/assets/version.txt" ||
     {
       echo 'unavailable'
       return 1
@@ -1049,10 +1051,10 @@ ls_instance() {
           if [[ "$OPT_LONGLIST" ]] || [[ "$OPT_JSON" ]]; then
             # Additionally fetch the images own version string if needed;
             # otherwise, avoid to reduce requests.
-            version_from_image=$(fetch_instance_builtin_version "$shortname") || true
+            version_from_image=$(fetch_instance_builtin_version "$port") || true
           fi
         else
-          version_from_image=$(fetch_instance_builtin_version "$shortname") || true
+          version_from_image=$(fetch_instance_builtin_version "$port") || true
           version=$version_from_image
         fi
       else
