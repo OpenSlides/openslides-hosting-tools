@@ -1526,7 +1526,7 @@ ls_instance() {
     treefmt node "Metadata"
     for m in "${metadata[@]}"; do
       m=$(highlight_match "$m") # Colorize match in metadata
-      treefmt body "$m"
+      treefmt body "${m}${COL_NORMAL}"
     done
   fi
 
