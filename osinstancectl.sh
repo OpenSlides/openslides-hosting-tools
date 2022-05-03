@@ -497,6 +497,10 @@ select_management_tool() {
 }
 
 call_manage_tool() {
+  [[ "$#" -ge 1 ]] ||
+    fatal "Insufficient parameters to call management tool."
+  [[ "$#" -ge 2 ]] ||
+    fatal "Missing command for management tool."
   local opts=
   local dir="$1"
   local cmd="$2"
@@ -511,12 +515,14 @@ call_manage_tool() {
     # manage commands that don't connect to the manage-server,
     # instead they operate in PROJECT_DIR
     setup | config )
-      local template= config=
-      [[ -z "$COMPOSE_TEMPLATE" ]] ||
+      local template= config= localconfig=
+      [[ ! -r "$COMPOSE_TEMPLATE" ]] ||
         template="--template=${COMPOSE_TEMPLATE}"
-      [[ -z "$CONFIG_YML_TEMPLATE" ]] ||
+      [[ ! -r "$CONFIG_YML_TEMPLATE" ]] ||
         config="--config=${CONFIG_YML_TEMPLATE}"
-      opts="$template $config --config=$PROJECT_DIR/config.yml $dir"
+      [[ ! -r "${PROJECT_DIR}/config.yml" ]] ||
+        localconfig="--config=${PROJECT_DIR}/config.yml"
+      opts="$template $config $localconfig $dir"
       ;;
     # all others are assumed to connect to the manage-server
     *)
