@@ -19,6 +19,7 @@ UPDATE_ERRORS=()
 PATTERN=
 TAG=
 OPT_MANAGEMENT_TOOL=
+OPT_FINALIZE="--migrations-finalize"
 ME="$(basename -s .sh "${BASH_SOURCE[0]}")"
 MIN_WIDTH=64
 DEFAULT_OPT_JOBS=3
@@ -39,6 +40,8 @@ Optional parameters:
                           (default: $DEFAULT_OPT_JOBS)
   --tmux                  Display jobs in tmux windows
   --tmuxpanes             Display jobs in tmux panes
+  -F, --no-finalize       Do migrations but do not finalize
+                          and leave the instance on the old version
 
 $ME expects the output of "os4instancectl ls --json" on its standard input.
 
@@ -79,8 +82,8 @@ instance_menu() {
     3>&2 2>&1 1>&3
 }
 
-shortopt="ht:O:j:"
-longopt="help,tag:,management-tool:,jobs:,tmux,tmuxpanes"
+shortopt="ht:O:j:F"
+longopt="help,tag:,management-tool:,jobs:,tmux,tmuxpanes,no-finalize"
 ARGS=$(getopt -o "$shortopt" -l "$longopt" -n "$ME" -- "$@")
 if [ $? -ne 0 ]; then usage; exit 1; fi
 eval set -- "$ARGS"
@@ -106,6 +109,10 @@ while true; do
       ;;
     --tmuxpanes)
       OPT_PARALLEL_TMUX="--tmuxpane"
+      shift 1
+      ;;
+    -F | --no-finalize)
+      OPT_FINALIZE=
       shift 1
       ;;
     -h | --help)
@@ -199,7 +206,8 @@ parallel --no-run-if-empty --tag --bar \
     --delay 0.5 --jobs=${OPT_PARALLEL_JOBS:=$DEFAULT_OPT_JOBS} $OPT_PARALLEL_TMUX \
   "$OSCTL" --no-pid-file --color=never \
     --tag="$TAG" --management-tool="$OPT_MANAGEMENT_TOOL" \
-    update '{}' ::: "${INSTANCES[@]}" || ec=$?
+    update "$OPT_FINALIZE" --migrations-no-ask '{}' \
+    ::: "${INSTANCES[@]}" || ec=$?
 if [[ $ec -ne 0 ]]; then
   echo
   echo "ERRORS ENCOUNTERED! ($PARALLEL_JOBLOG):"

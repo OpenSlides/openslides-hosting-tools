@@ -10,6 +10,7 @@ _os4instancectl()
   opts+=" --long --metadata --online --offline --error --version --locked --unlocked"
   opts+=" --clone-from --local-only"
   opts+=" --tag --management-tool"
+  opts+=" --migrations-finalize --migrations-no-ask"
   opts+=" --accounts --dry-run"
   opts+=" --action"
   diropts="ls|rm|start|stop|update|erase|lock|unlock|autoscale|manage|--clone-from|--"
