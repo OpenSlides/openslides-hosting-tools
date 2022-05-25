@@ -1684,9 +1684,8 @@ list_instances() {
 clone_instance_dir() {
   marker_check "$CLONE_FROM_DIR"
   cp -av "${CLONE_FROM_DIR}/config.yml" "${PROJECT_DIR}/"
-  cp -av "${CLONE_FROM_DIR}/setup/${ADMIN_SECRETS_FILE}" "${PROJECT_DIR}/secrets/"
-  [[ ! -f "${CLONE_FROM_DIR}/setup/{$USER_SECRETS_FILE}" ]] ||
-    cp -av "${CLONE_FROM_DIR}/setup/{$USER_SECRETS_FILE}" "${PROJECT_DIR}/secrets/"
+  cp -av "${CLONE_FROM_DIR}/secrets/${ADMIN_SECRETS_FILE}" "${PROJECT_DIR}/secrets/"
+  cp -av "${CLONE_FROM_DIR}/setup/" "${PROJECT_DIR}/"
 }
 
 append_metadata() {
