@@ -140,7 +140,7 @@ Actions:
   rm                   Remove <instance> (requires FQDN)
   start                Start, i.e., (re)deploy an existing instance
   stop                 Stop a running instance
-  update               Update OpenSlides services to a new images
+  update               Update OpenSlides services to a new version
   erase                Execute the mid-erase hook without otherwise removing
                        the instance.
   lock                 Put a lock on the instance which prohibits one or more
@@ -151,10 +151,10 @@ Actions:
                        no meeting scheduled for today.
                        (adjust values in CONFIG file)
   manage               Call the openslides-manage tool on an instance.
-                       \`openslides help\` for more details on usage.
+                       See the tool's help message for details on its usage.
                        All args ond opts that are to be passed to the tool
                        should be stated after a '--'.
-                       If the manage command is more than one word it must be
+                       If the management command is more than one word it must be
                        quoted, e.g. 'migrations stats'.
   help <action>        Print detailed usage information for the given action.
 
@@ -249,7 +249,7 @@ EOF
                        [Default: ${DEFAULT_MANAGEMENT_VERSION}]
     --migrations-finalize  Immediately finalize required migrations and do the
                        full instance update as soon as possible.
-    --migrations-no-ask  Don't ask for confirmations when handling migrations.
+    --migrations-no-ask  Do not ask for confirmations when handling migrations.
 EOF
 ;;
   create | update)
@@ -274,10 +274,10 @@ EOF
                        accessible on localhost, e.g., http://127.0.0.1:61000.
     --migrations-finalize  Immediately finalize required migrations and do the
                        full instance update as soon as possible.
-    --migrations-no-ask  Don't ask for confirmations when handling migrations.
-    --no-add-account   Do not add an additional, customized local admin account
+    --migrations-no-ask  Do not ask for confirmations when handling migrations.
+    --no-add-account   Do not add an additional, customized local admin account.
     --clone-from       Create the new instance based on the specified existing
-                       instance
+                       instance.
 EOF
 ;;
   autoscale)
@@ -529,8 +529,8 @@ call_manage_tool() {
     config-create-default | help )
       break
       ;;
-    # manage commands that don't connect to the manage-server,
-    # instead they operate in PROJECT_DIR
+    # management commands that don't connect to the 'manage' service and,
+    # instead, operate in PROJECT_DIR
     setup | config )
       local template= config= localconfig=
       [[ ! -r "$COMPOSE_TEMPLATE" ]] ||
@@ -541,11 +541,12 @@ call_manage_tool() {
         localconfig="--config=${PROJECT_DIR}/config.yml"
       opts="$template $config $localconfig $dir"
       ;;
-    # all others are assumed to connect to the manage-server
+    # all other commands are assumed to connect to the 'manage' service
     *)
       local port=$(value_from_config_yml "$dir" '.port')
       local secret="${dir}/secrets/manage_auth_password"
-      # The manage tool can't connect to the manage-server without access to the secret.
+      # The manage tool can't connect to the 'manage' service without access to
+      # the secret.
       [[ -r "$secret" ]] || return 1
       opts="-a 127.0.0.1:${port} --password-file $secret --no-ssl"
       ;;
@@ -844,8 +845,9 @@ instance_has_services_running() {
 }
 
 instance_has_manage_service_running() {
-  # Check if the manage-service is ready to execute commands by running it's
-  # check-server command, verifying that manage-client, -server and backend are operational.
+  # Check if the 'manage' service is ready to execute commands by running its
+  # check-server command, verifying that the management client, management
+  # service, and backend are all operational.
   local instance="${1:-$PROJECT_DIR}" output= ec=
   case "$DEPLOYMENT_MODE" in
     "stack")
@@ -1793,10 +1795,9 @@ instance_handle_migrations() {
     [[ -n "$OPT_MIGRATIONS_ASK" ]] ||
       return 0
 
-    local message="$1 [Y/n]" answer=
-    echo "$message"
-    read -rp "" answer
-    case "$answer" in
+    local REPLY
+    read -p "$* [Y/n]"
+    case "$REPLY" in
       Y|y|Yes|yes|YES|"")
         return 0
       ;;
@@ -1807,13 +1808,12 @@ instance_handle_migrations() {
   }
   stats_filtered() {
     local filter="${1:-}"
-    call_manage_tool "$PROJECT_DIR" "migrations stats" | yq eval "$filter" -
-    [[ "${PIPESTATUS[1]}" -eq 0 ]] ||
+    call_manage_tool "$PROJECT_DIR" "migrations stats" | yq eval "$filter" - ||
       fatal "Management tool failed during migrations."
   }
 
   local backend_versions="$(docker stack services "$PROJECT_STACK_NAME" --format '{{ .Image }}' |
-    grep backend | awk -F: '{print $2}' | sort -u | wc -l)"
+    gawk -F: '$1 ~ /backend/ {a[$2]++} END {print length(a)}')"
 
   echo "Current status of migrations:"
   stats_filtered |& tag_output manage
@@ -1824,15 +1824,15 @@ instance_handle_migrations() {
       # This is done to ensure the migration index gets updated when it's -1.
       # This is the case for a fresh instance and leads to problems when the
       # first required migration gets skipped because of it.
-      echo "No migration required. Finalizing anyway, to ensure consistent migration indices ..."
+      echo "No migration required. Finalizing anyway to ensure consistent migration indices."
       call_manage_tool "$PROJECT_DIR" 'migrations finalize' |& tag_output manage
       [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
     ;;
     "$MIGRATIONS_STATUS_REQ")
       # do finalize if switch provided and all backend are on the same (i.e. updated) version
       if [[ -n "$OPT_MIGRATIONS_FINALIZE" ]] && [[ "$backend_versions" -eq 1 ]]; then
-        ask "Start migrations and finalize?" || return 1
-        echo "Finalizing ..."
+        ask "Start migration and finalize?" || return 1
+        echo "Finalizing..."
         call_manage_tool "$PROJECT_DIR" 'migrations finalize' |& tag_output manage
         [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
       else
@@ -1841,9 +1841,9 @@ instance_handle_migrations() {
           warn "Call with --migrations-finalize to do it immediately."
         }
         ask "Start migrations now without finalizing?" || return 1
-        echo "Migrating ..."
+        echo "Migrating..."
         call_manage_tool "$PROJECT_DIR" 'migrations migrate' |& tag_output manage
-	[[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_FIN_REQ" ]] || ec=$?; return $ec
+        [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_FIN_REQ" ]] || ec=$?; return $ec
       fi
     ;;
     "$MIGRATIONS_STATUS_FIN_REQ")
@@ -1852,12 +1852,12 @@ instance_handle_migrations() {
           warn "Before finalizing migrations, be sure the whole stack is updated to the new version."
           warn "I.e. you called \`$ME update\`"
         }
-        ask "Finalize previously ran migrations?" || return 1
-        echo "Finalizing ..."
+        ask "Finalize pending migrations?" || return 1
+        echo "Finalizing..."
         call_manage_tool "$PROJECT_DIR" 'migrations finalize' |& tag_output manage
-	[[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
+        [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
       else
-        warn "Migrations are done, but finalizing is still needed. Call update with --migrations-finalize"
+        warn "Migrations have finished but still need to be finilized. Call update with --migrations-finalize"
       fi
     ;;
   esac
@@ -1876,7 +1876,7 @@ instance_start() {
 
   printf "Waiting for instance to become ready."
   wait_for instance_health_status
-  printf "Waiting for manage-service to become ready."
+  printf "Waiting for 'manage' service to become ready."
   wait_for instance_has_manage_service_running
 
   instance_handle_migrations ||
@@ -1977,11 +1977,11 @@ instance_update_step_1() {
   docker service update -q "${PROJECT_STACK_NAME}_${MANAGEMENT_BACKEND}" \
     --image "$registry/openslides-backend:$DOCKER_IMAGE_TAG_OPENSLIDES" |&
       tag_output "$DEPLOYMENT_MODE"
-  printf "Waiting for manage-service to become ready."
+  printf "Waiting for management service to become ready."
   wait_for instance_has_manage_service_running
   # do step 1 migrations
   instance_handle_migrations || {
-    verbose 1 "Reverting service ${MANAGEMENT_BACKEND} to old version for manage commands to keep working"
+    verbose 1 "Reverting service ${MANAGEMENT_BACKEND} to old version for management commands to keep working"
     docker service update -q "${PROJECT_STACK_NAME}_${MANAGEMENT_BACKEND}" \
       --image "$registry/openslides-backend:$old_tag" |&
         tag_output "$DEPLOYMENT_MODE"
@@ -2002,7 +2002,7 @@ instance_update_step_2() {
     echo "      The configuration has been updated and the instance will be upgraded upon its next start."
     echo "      Note that the next start might take a long time due to pending migrations."
     echo "      Consider starting the instance and running migrations now."
-    echo "      Alternatively downgrade on next start to run migrations in the background."
+    echo "      Alternatively, downgrade for now and run migrations in the background once the instance is started."
     return 0
   }
   # For running instances update the whole stack, will also finalize migrations
@@ -2113,7 +2113,7 @@ instance_autoscale() {
     for service in ${!services_changed[@]}
     do
       append_metadata "$PROJECT_DIR" "$(date +"%F %H:%M"):"\
-	"Autoscaled $service from ${SCALE_FROM[$service]} to ${SCALE_TO[$service]}"
+        "Autoscaled $service from ${SCALE_FROM[$service]} to ${SCALE_TO[$service]}"
     done
   }
 
