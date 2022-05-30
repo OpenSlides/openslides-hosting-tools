@@ -2189,6 +2189,7 @@ instance_update() {
 
 instance_update_step_1() {
   local registry=$(value_from_config_yml "$PROJECT_DIR" '.defaults.containerRegistry')
+  [[ -n "$registry" ]] || fatal "Could not determine image registry."
   local old_tag=$(value_from_config_yml "$PROJECT_DIR" '.defaults.tag')
 
   echo "Updating service ${MANAGEMENT_BACKEND} to new version for data migration"
