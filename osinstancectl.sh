@@ -1821,17 +1821,21 @@ instance_handle_migrations() {
   ec=0
   case "$(stats_filtered .status)" in
     "$MIGRATIONS_STATUS_NOT_REQ")
-      # This is done to ensure the migration index gets updated when it's -1.
-      # This is the case for a fresh instance and leads to problems when the
-      # first required migration gets skipped because of it.
-      echo "No migration required. Finalizing anyway to ensure consistent migration indices."
-      call_manage_tool "$PROJECT_DIR" 'migrations finalize' |& tag_output manage
+      echo "No migration required."
       [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
     ;;
     "$MIGRATIONS_STATUS_REQ")
+      # This is done to ensure the migration index gets updated when it's -1.
+      # This is the case for a fresh instance and leads to problems when the
+      # first required migration gets skipped because of it.
+      if [[ "$(stats_filtered .current_migration_index)" -lt 0 ]]; then
+        echo "Negative migration index found. Finalizing in any case to ensure consistency ..."
+        call_manage_tool "$PROJECT_DIR" 'migrations finalize' |& tag_output manage
+        [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
+      fi
       # do finalize if switch provided and all backend are on the same (i.e. updated) version
       if [[ -n "$OPT_MIGRATIONS_FINALIZE" ]] && [[ "$backend_versions" -eq 1 ]]; then
-        ask "Start migration and finalize?" || return 1
+        ask "Start migrations and finalize?" || return 1
         echo "Finalizing..."
         call_manage_tool "$PROJECT_DIR" 'migrations finalize' |& tag_output manage
         [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
@@ -1879,14 +1883,13 @@ instance_start() {
   printf "Waiting for 'manage' service to become ready."
   wait_for instance_has_manage_service_running
 
+  [[ "$MODE" == "update" ]] || {
+    instance_initialdata
+    instance_setup_organization
+    instance_setup_user
+  }
   instance_handle_migrations ||
     fatal "Error during migrations. Aborting."
-  if [[ "$MODE" == "update" ]]; then
-    return
-  fi
-  instance_initialdata
-  instance_setup_organization
-  instance_setup_user
 }
 
 instance_stop() {
