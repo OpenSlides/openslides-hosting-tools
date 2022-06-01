@@ -719,9 +719,11 @@ next_free_port() {
   HIGHEST_PORT_IN_USE=$(
     {
       # OS3 instance ports
-      find "${OS3_INSTANCES}" -type f -name ".env" -print0 |
-      xargs -0 --no-run-if-empty grep -h "EXTERNAL_HTTP_PORT" |
-      cut -d= -f2 | tr -d \"\'
+      if [[ -d "${OS3_INSTANCES}" ]]; then
+        find "${OS3_INSTANCES}" -type f -name ".env" -print0 |
+        xargs -0 --no-run-if-empty grep -h "EXTERNAL_HTTP_PORT" |
+        cut -d= -f2 | tr -d \"\'
+      fi
       # OS4 instance ports
       find "${INSTANCES}" -type f -name "config.yml" -print0 |
       xargs -0 --no-run-if-empty yq --no-doc eval '.port'
