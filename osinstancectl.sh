@@ -552,7 +552,7 @@ call_manage_tool() {
       ;;
   esac
 
-  verbose 1 "Executing $MANAGEMENT_TOOL $cmd $opts $args"
+  verbose 2 "Executing $MANAGEMENT_TOOL $cmd $opts $args"
   $MANAGEMENT_TOOL $cmd $opts $args || return $?
 }
 
@@ -853,7 +853,7 @@ instance_has_manage_service_running() {
     "stack")
       output=$(call_manage_tool "$instance" check-server -t 1s)
       ec=$?
-      verbose 2 "exit code: $ec output: $output"
+      verbose 2 "management tool exit code: $ec; output: $output"
       return $ec
       ;;
   esac
@@ -1788,6 +1788,19 @@ instance_setup_organization() {
   fi
 }
 
+migration_stats_filtered() {
+  # XXX: This function only works within the update context.  Before using it
+  # outside of this context, e.g., for ls, $PROJECT_DIR et al. must be accepted
+  # as arguments.
+  local filter="${1:-}"
+  instance_has_services_running "$PROJECT_STACK_NAME" || {
+    verbose 1 "${PROJECT_NAME} is not running; cannot retrieve migration stats."
+    return 1
+  }
+  call_manage_tool "$PROJECT_DIR" "migrations stats" | yq eval "$filter" - ||
+    fatal "migrations stats command failed."
+}
+
 # Calls appropriate migration command on the manage service depending on present
 # cirumstances. Returns 1 if the status afterwards is unexpected.
 instance_handle_migrations() {
@@ -1806,39 +1819,33 @@ instance_handle_migrations() {
       ;;
     esac
   }
-  stats_filtered() {
-    local filter="${1:-}"
-    call_manage_tool "$PROJECT_DIR" "migrations stats" | yq eval "$filter" - ||
-      fatal "Management tool failed during migrations."
-  }
-
   local backend_versions="$(docker stack services "$PROJECT_STACK_NAME" --format '{{ .Image }}' |
     gawk -F: '$1 ~ /backend/ {a[$2]++} END {print length(a)}')"
 
-  echo "Current status of migrations:"
-  stats_filtered |& tag_output manage
+  info "Current status of migrations:"
+  migration_stats_filtered |& tag_output manage
 
   ec=0
-  case "$(stats_filtered .status)" in
+  case "$(migration_stats_filtered .status)" in
     "$MIGRATIONS_STATUS_NOT_REQ")
-      echo "No migration required."
-      [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
+      info "No migration required."
+      [[ "$(migration_stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
     ;;
     "$MIGRATIONS_STATUS_REQ")
       # This is done to ensure the migration index gets updated when it's -1.
       # This is the case for a fresh instance and leads to problems when the
       # first required migration gets skipped because of it.
-      if [[ "$(stats_filtered .current_migration_index)" -lt 0 ]]; then
+      if [[ "$(migration_stats_filtered .current_migration_index)" -lt 0 ]]; then
         echo "Negative migration index found. Finalizing in any case to ensure consistency ..."
         call_manage_tool "$PROJECT_DIR" 'migrations finalize' |& tag_output manage
-        [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
+        [[ "$(migration_stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
       fi
       # do finalize if switch provided and all backend are on the same (i.e. updated) version
       if [[ -n "$OPT_MIGRATIONS_FINALIZE" ]] && [[ "$backend_versions" -eq 1 ]]; then
         ask "Start migrations and finalize?" || return 1
         echo "Finalizing..."
         call_manage_tool "$PROJECT_DIR" 'migrations finalize' |& tag_output manage
-        [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
+        [[ "$(migration_stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
       else
         [[ "$MODE" != start ]] || {
           warn "Finalization of migrations will still be required."
@@ -1847,7 +1854,7 @@ instance_handle_migrations() {
         ask "Start migrations now without finalizing?" || return 1
         echo "Migrating..."
         call_manage_tool "$PROJECT_DIR" 'migrations migrate' |& tag_output manage
-        [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_FIN_REQ" ]] || ec=$?; return $ec
+        [[ "$(migration_stats_filtered .status)" == "$MIGRATIONS_STATUS_FIN_REQ" ]] || ec=$?; return $ec
       fi
     ;;
     "$MIGRATIONS_STATUS_FIN_REQ")
@@ -1859,7 +1866,7 @@ instance_handle_migrations() {
         ask "Finalize pending migrations?" || return 1
         echo "Finalizing..."
         call_manage_tool "$PROJECT_DIR" 'migrations finalize' |& tag_output manage
-        [[ "$(stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
+        [[ "$(migration_stats_filtered .status)" == "$MIGRATIONS_STATUS_NOT_REQ" ]] || ec=$?; return $ec
       else
         warn "Migrations have finished but still need to be finilized. Call update with --migrations-finalize"
       fi
@@ -1961,22 +1968,32 @@ instance_update() {
     append_metadata "$PROJECT_DIR" "$metadata_string"
   fi
 
-  instance_update_step_1
-  if [[ -n "$OPT_MIGRATIONS_FINALIZE" ]]; then
+  if instance_has_services_running "$PROJECT_STACK_NAME"; then
+    verbose 1 "Instance is running; continuing with migrations."
+    # For online instances, start database migrations
+    instance_update_step_1
+    # Continue to update step 2 if --migrations-finalize is set or if there are
+    # no migrations required anyway.  Step 2 includes updating the instance
+    # configuration files, updating the running containers, and finalizing the
+    # database migrations.
+    if [[ -n "$OPT_MIGRATIONS_FINALIZE" ]] ||
+        [[ "$(migration_stats_filtered .status)" = "$MIGRATIONS_STATUS_NOT_REQ" ]]
+    then
+      instance_update_step_2
+    fi
+  else
+    # For offline instances, no database migrations can be started.  Instead,
+    # simply update the configuration files to the requested version.
+    verbose 1 "Instance is not running; skipping migrations."
     instance_update_step_2
   fi
 }
 
 instance_update_step_1() {
-  instance_has_services_running "$PROJECT_STACK_NAME" || {
-    verbose 1 "${PROJECT_NAME} is not running, skipping step 1"
-    return 0
-  }
-
   local registry=$(value_from_config_yml "$PROJECT_DIR" '.defaults.containerRegistry')
   local old_tag=$(value_from_config_yml "$PROJECT_DIR" '.defaults.tag')
 
-  verbose 1 "Updating service ${MANAGEMENT_BACKEND} to new version for data migration"
+  echo "Updating service ${MANAGEMENT_BACKEND} to new version for data migration"
   docker service update -q "${PROJECT_STACK_NAME}_${MANAGEMENT_BACKEND}" \
     --image "$registry/openslides-backend:$DOCKER_IMAGE_TAG_OPENSLIDES" |&
       tag_output "$DEPLOYMENT_MODE"
@@ -1984,7 +2001,7 @@ instance_update_step_1() {
   wait_for instance_has_manage_service_running
   # do step 1 migrations
   instance_handle_migrations || {
-    verbose 1 "Reverting service ${MANAGEMENT_BACKEND} to old version for management commands to keep working"
+    warn "Reverting service ${MANAGEMENT_BACKEND} to old version for management commands to keep working"
     docker service update -q "${PROJECT_STACK_NAME}_${MANAGEMENT_BACKEND}" \
       --image "$registry/openslides-backend:$old_tag" |&
         tag_output "$DEPLOYMENT_MODE"
@@ -1993,6 +2010,7 @@ instance_update_step_1() {
 }
 
 instance_update_step_2() {
+  echo "Updating instance configuration."
   # Update values in config.yml
   update_config_yml "${PROJECT_DIR}/config.yml" \
     ".defaults.tag = \"$DOCKER_IMAGE_TAG_OPENSLIDES\""
@@ -2009,6 +2027,7 @@ instance_update_step_2() {
     return 0
   }
   # For running instances update the whole stack, will also finalize migrations
+  echo "Starting instance."
   instance_start
 }
 
