@@ -1,6 +1,0 @@
-docker-compose.yml
-docker-stack.yml
-/secrets/
-/metadata.txt
-/.osinstancectl-marker
-/settings.py
