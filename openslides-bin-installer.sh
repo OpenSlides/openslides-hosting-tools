@@ -168,7 +168,7 @@ if [[ "$REV" ]]; then
   git -C "$BUILD_DIR" submodule update openslides-manage-service
   (
     cd "${BUILD_DIR}/openslides-manage-service"
-    make openslides
+    chronic make openslides
     mv openslides "$TEMPFILE"
   )
 else
