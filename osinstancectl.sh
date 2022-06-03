@@ -446,12 +446,6 @@ arg_check() {
       ;;
   esac
   case "$MODE" in
-    "update")
-      [[ -n "$DOCKER_IMAGE_TAG_OPENSLIDES" ]] && [[ -n "$OPT_MANAGEMENT_TOOL" ]] ||
-        fatal "Update requires both the --tag and --management-tool options."
-      ;;
-  esac
-  case "$MODE" in
     "lock" | "unlock")
       for i in "${OPT_LOCK_ACTION[@]}"; do
         grep -qw "$i" <<< "$ALLOWED_LOCK_ACTIONS" ||
@@ -2896,9 +2890,9 @@ case "$MODE" in
     arg_check
     # Use defaults in the absence of options
     echo "Creating new instance: $PROJECT_NAME"
-    # If not specified, set management tool to "-", i.e., track the latest
-    # version
+    # If not specified, set management tool to the latest available version.
     [[ -n "$OPT_MANAGEMENT_TOOL" ]] || OPT_MANAGEMENT_TOOL=$DEFAULT_MANAGEMENT_VERSION
+    verbose 2 "OPT_MANAGEMENT_TOOL=$OPT_MANAGEMENT_TOOL"
     query_user_account_name
     select_management_tool
     PORT=$(next_free_port)
@@ -3030,6 +3024,11 @@ case "$MODE" in
     else
       verbose 1 "$MODE action is not locked."
     fi
+    # If not specified on the command line, set management tool to the latest
+    # available version.  Do not simply read the current, i.e., outdated,
+    # version from config.yml.
+    [[ -n "$OPT_MANAGEMENT_TOOL" ]] || OPT_MANAGEMENT_TOOL=$DEFAULT_MANAGEMENT_VERSION
+    verbose 2 "OPT_MANAGEMENT_TOOL=$OPT_MANAGEMENT_TOOL"
     {
       select_management_tool
       append_metadata "$PROJECT_DIR" \
